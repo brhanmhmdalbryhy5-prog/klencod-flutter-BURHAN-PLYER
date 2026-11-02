@@ -13,7 +13,7 @@ class VideoEngine {
       configuration: const PlayerConfiguration(
         title: 'Burhan Plyer',
         pitch: true,
-        bufferSize: 64 * 1024 * 1024,
+        bufferSize: 32 * 1024 * 1024,
       ),
     );
 
@@ -39,15 +39,13 @@ class VideoEngine {
   }
 
   Future<void> setVolume(double value) async {
-    await player.setVolume(
-      value.clamp(0.0, 100.0).toDouble(),
-    );
+    final volume = value.clamp(0.0, 100.0).toDouble();
+    await player.setVolume(volume);
   }
 
   Future<void> setSpeed(double value) async {
-    await player.setRate(
-      value.clamp(0.25, 3.0).toDouble(),
-    );
+    final speed = value.clamp(0.25, 3.0).toDouble();
+    await player.setRate(speed);
   }
 
   Future<void> setRepeat(bool enabled) async {
