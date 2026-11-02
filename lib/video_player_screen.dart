@@ -12,7 +12,12 @@ import 'gesture_controls.dart';
 import 'subtitle_manager.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
-  const VideoPlayerScreen({super.key});
+  final String? initialPath;
+
+  const VideoPlayerScreen({
+    super.key,
+    this.initialPath,
+  });
 
   @override
   State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
@@ -25,12 +30,42 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   bool hwPlus = false;
   bool repeat = false;
   bool fullscreen = false;
+  bool opening = false;
   double volume = 100;
 
   @override
   void initState() {
     super.initState();
     engine = VideoEngine();
+
+    if (widget.initialPath != null) {
+      currentPath = widget.initialPath;
+      opening = true;
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        openInitialVideo();
+      });
+    }
+  }
+
+  Future<void> openInitialVideo() async {
+    final path = widget.initialPath;
+    if (path == null) return;
+
+    try {
+      await engine.open(path);
+      await WakelockPlus.enable();
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر تشغيل الفيديو: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => opening = false);
+      }
+    }
   }
 
   Future<void> openVideo() async {
@@ -40,12 +75,27 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
     if (result == null || result.files.single.path == null) return;
 
-    currentPath = result.files.single.path!;
+    final path = result.files.single.path!;
 
-    await engine.open(currentPath!);
-    await WakelockPlus.enable();
+    try {
+      setState(() {
+        currentPath = path;
+        opening = true;
+      });
 
-    if (mounted) setState(() {});
+      await engine.open(path);
+      await WakelockPlus.enable();
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر فتح الفيديو: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => opening = false);
+      }
+    }
   }
 
   Future<void> openSubtitle() async {
@@ -60,8 +110,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       await SubtitleManager(engine.player).load(
         result.files.single.path!,
       );
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم إرسال ملف الترجمة للمشغل.')),
+      );
     } catch (e) {
       if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('تعذر تحميل الترجمة: $e')),
       );
@@ -69,35 +126,63 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   }
 
   Future<void> changeMode() async {
-    if (currentPath == null) {
-      setState(() => hwPlus = !hwPlus);
+    if (currentPath == null || opening) {
+      if (currentPath == null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('افتح فيديو أولاً.')),
+        );
+      }
       return;
     }
 
     final oldPosition = engine.player.state.position;
+    final wasPlaying = engine.player.state.playing;
     final path = currentPath!;
-
     final newMode = !hwPlus;
 
-    await engine.dispose();
+    setState(() => opening = true);
 
-    engine = VideoEngine(hwPlus: newMode);
-    hwPlus = newMode;
+    try {
+      await engine.dispose();
 
-    await engine.open(path);
-    await engine.seek(oldPosition);
+      engine = VideoEngine(hwPlus: newMode);
+      hwPlus = newMode;
 
-    if (mounted) setState(() {});
+      await engine.open(path);
+      await engine.seek(oldPosition);
+
+      if (wasPlaying) {
+        await engine.player.play();
+      }
+
+      await engine.setVolume(volume);
+      await engine.setRepeat(repeat);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('تعذر تغيير وضع الترميز: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => opening = false);
+    }
   }
 
   Future<void> toggleRepeat() async {
     repeat = !repeat;
     await engine.setRepeat(repeat);
+
     if (mounted) setState(() {});
   }
 
   Future<void> rotate() async {
     fullscreen = !fullscreen;
+
+    await SystemChrome.setEnabledSystemUIMode(
+      fullscreen
+          ? SystemUiMode.immersiveSticky
+          : SystemUiMode.edgeToEdge,
+    );
 
     await SystemChrome.setPreferredOrientations(
       fullscreen
@@ -107,7 +192,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
             ]
           : [
               DeviceOrientation.portraitUp,
-              DeviceOrientation.portraitDown,
             ],
     );
 
@@ -122,6 +206,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   @override
   void dispose() {
     WakelockPlus.disable();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations(
       [DeviceOrientation.portraitUp],
     );
@@ -134,45 +219,48 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF101114),
       body: SafeArea(
+        top: !fullscreen,
+        bottom: !fullscreen,
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 14,
-                vertical: 10,
-              ),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.play_circle_fill,
-                    color: Color(0xFFE0A0AA),
-                    size: 30,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      fileName(currentPath),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
+            if (!fullscreen)
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.play_circle_fill,
+                      color: Color(0xFFE0A0AA),
+                      size: 30,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        fileName(currentPath),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
-                  ),
-                  TextButton(
-                    onPressed: changeMode,
-                    child: Text(
-                      hwPlus ? 'HW+' : 'HW',
-                      style: const TextStyle(
-                        color: Color(0xFFE0A0AA),
-                        fontWeight: FontWeight.bold,
+                    TextButton(
+                      onPressed: opening ? null : changeMode,
+                      child: Text(
+                        hwPlus ? 'HW+' : 'HW',
+                        style: const TextStyle(
+                          color: Color(0xFFE0A0AA),
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
 
             Expanded(
               child: Container(
@@ -180,107 +268,120 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 width: double.infinity,
                 child: currentPath == null
                     ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(
-                              Icons.video_library_outlined,
-                              color: Colors.white54,
-                              size: 75,
-                            ),
-                            const SizedBox(height: 15),
-                            const Text(
-                              'Burhan Plyer',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 22,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            ElevatedButton.icon(
-                              onPressed: openVideo,
-                              icon: const Icon(Icons.folder_open),
-                              label: const Text('اختر فيديو'),
-                            ),
-                          ],
+                        child: ElevatedButton.icon(
+                          onPressed: openVideo,
+                          icon: const Icon(Icons.folder_open),
+                          label: const Text('اختر فيديو'),
                         ),
                       )
-                    : StreamBuilder<Duration>(
-                        stream: engine.player.stream.position,
-                        builder: (context, snapshot) {
-                          final position =
-                              snapshot.data ?? Duration.zero;
+                    : Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          StreamBuilder<Duration>(
+                            stream: engine.player.stream.position,
+                            builder: (context, snapshot) {
+                              final position =
+                                  snapshot.data ?? Duration.zero;
 
-                          return StreamBuilder<Duration>(
-                            stream: engine.player.stream.duration,
-                            builder: (context, durationSnapshot) {
-                              final duration =
-                                  durationSnapshot.data ?? Duration.zero;
+                              return StreamBuilder<Duration>(
+                                stream: engine.player.stream.duration,
+                                builder: (context, durationSnapshot) {
+                                  final duration =
+                                      durationSnapshot.data ?? Duration.zero;
 
-                              return GestureControls(
-                                position: position,
-                                duration: duration,
-                                volume: volume,
-                                onSeek: (value) {
-                                  engine.seek(value);
-                                },
-                                onVolume: (value) {
-                                  volume = value;
-                                  engine.setVolume(value);
-                                },
-                                child: Video(
-                                  controller: engine.controller,
-                                  controls: NoVideoControls,
-                                  subtitleViewConfiguration:
-                                      const SubtitleViewConfiguration(
-                                    style: TextStyle(
-                                      fontSize: 22,
-                                      color: Colors.white,
-                                      backgroundColor: Color(0xAA000000),
+                                  return GestureControls(
+                                    position: position,
+                                    duration: duration,
+                                    volume: volume,
+                                    onSeek: (value) {
+                                      engine.seek(value);
+                                    },
+                                    onVolume: (value) {
+                                      volume = value;
+                                      engine.setVolume(value);
+                                    },
+                                    child: Video(
+                                      controller: engine.controller,
+                                      controls: NoVideoControls,
+                                      subtitleViewConfiguration:
+                                          const SubtitleViewConfiguration(
+                                        style: TextStyle(
+                                          fontSize: 22,
+                                          color: Colors.white,
+                                          backgroundColor:
+                                              Color(0xAA000000),
+                                        ),
+                                        textAlign: TextAlign.center,
+                                        padding: EdgeInsets.all(20),
+                                      ),
                                     ),
-                                    textAlign: TextAlign.center,
-                                    padding: EdgeInsets.all(20),
-                                  ),
-                                ),
+                                  );
+                                },
                               );
                             },
-                          );
-                        },
+                          ),
+
+                          if (opening)
+                            Container(
+                              color: Colors.black54,
+                              child: const Center(
+                                child: CircularProgressIndicator(
+                                  color: Color(0xFFE0A0AA),
+                                ),
+                              ),
+                            ),
+
+                          if (fullscreen)
+                            Positioned(
+                              top: 12,
+                              right: 12,
+                              child: IconButton(
+                                onPressed: rotate,
+                                icon: const Icon(
+                                  Icons.fullscreen_exit,
+                                  color: Colors.white,
+                                  size: 30,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
               ),
             ),
 
-            StreamBuilder<bool>(
-              stream: engine.player.stream.playing,
-              builder: (context, snapshot) {
-                final playing = snapshot.data ?? false;
+            if (!fullscreen)
+              StreamBuilder<bool>(
+                stream: engine.player.stream.playing,
+                builder: (context, snapshot) {
+                  final playing = snapshot.data ?? false;
 
-                return StreamBuilder<Duration>(
-                  stream: engine.player.stream.position,
-                  builder: (context, positionSnapshot) {
-                    return StreamBuilder<Duration>(
-                      stream: engine.player.stream.duration,
-                      builder: (context, durationSnapshot) {
-                        return VideoControls(
-                          position: positionSnapshot.data ?? Duration.zero,
-                          duration: durationSnapshot.data ?? Duration.zero,
-                          playing: playing,
-                          repeat: repeat,
-                          onPlayPause: () => engine.playPause(),
-                          onRepeat: toggleRepeat,
-                          onRotate: rotate,
-                          onSeek: engine.seek,
-                          onOpenFile: openVideo,
-                          onSubtitle: openSubtitle,
-                          onMode: changeMode,
-                        );
-                      },
-                    );
-                  },
-                );
-              },
-            ),
+                  return StreamBuilder<Duration>(
+                    stream: engine.player.stream.position,
+                    builder: (context, positionSnapshot) {
+                      return StreamBuilder<Duration>(
+                        stream: engine.player.stream.duration,
+                        builder: (context, durationSnapshot) {
+                          return VideoControls(
+                            position:
+                                positionSnapshot.data ?? Duration.zero,
+                            duration:
+                                durationSnapshot.data ?? Duration.zero,
+                            playing: playing,
+                            repeat: repeat,
+                            onPlayPause: () => engine.playPause(),
+                            onRepeat: toggleRepeat,
+                            onRotate: rotate,
+                            onSeek: engine.seek,
+                            onOpenFile: openVideo,
+                            onSubtitle: openSubtitle,
+                            onMode: changeMode,
+                          );
+                        },
+                      );
+                    },
+                  );
+                },
+              ),
           ],
         ),
       ),
