@@ -9,7 +9,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'video_engine.dart';
 import 'video_controls.dart';
 import 'gesture_controls.dart';
-import 'subtitle_manager.dart';
+import 'subtitle_audio_panel.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   final String? initialPath;
@@ -99,30 +99,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   }
 
   Future<void> openSubtitle() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['srt', 'ass', 'ssa', 'vtt'],
-    );
-
-    if (result == null || result.files.single.path == null) return;
-
-    try {
-      await SubtitleManager(engine.player).load(
-        result.files.single.path!,
-      );
-
-      if (!mounted) return;
-
+    if (currentPath == null || opening) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم إرسال ملف الترجمة للمشغل.')),
+        const SnackBar(content: Text('افتح فيديو أولاً.')),
       );
-    } catch (e) {
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تعذر تحميل الترجمة: $e')),
-      );
+      return;
     }
+
+    await showSubtitleAudioPanel(context, engine.player);
   }
 
   Future<void> changeMode() async {
