@@ -36,24 +36,28 @@ class VideoControls extends StatelessWidget {
   });
 
   String formatTime(Duration d) {
+    final safe = d.isNegative ? Duration.zero : d;
+
     String two(int n) => n.toString().padLeft(2, '0');
 
-    if (d.inHours > 0) {
-      return '${two(d.inHours)}:${two(d.inMinutes.remainder(60))}:${two(d.inSeconds.remainder(60))}';
+    if (safe.inHours > 0) {
+      return '${two(safe.inHours)}:'
+          '${two(safe.inMinutes.remainder(60))}:'
+          '${two(safe.inSeconds.remainder(60))}';
     }
 
-    return '${two(d.inMinutes)}:${two(d.inSeconds.remainder(60))}';
+    return '${two(safe.inMinutes)}:'
+        '${two(safe.inSeconds.remainder(60))}';
   }
 
   void skip(int seconds) {
+    if (duration <= Duration.zero) return;
+
     final target = position + Duration(seconds: seconds);
-    final max = duration.inMilliseconds;
 
     final safe = Duration(
-      milliseconds: target.inMilliseconds.clamp(
-        0,
-        max > 0 ? max : 0,
-      ),
+      milliseconds: target.inMilliseconds
+          .clamp(0, duration.inMilliseconds),
     );
 
     onSeek(safe);
@@ -63,6 +67,11 @@ class VideoControls extends StatelessWidget {
   Widget build(BuildContext context) {
     final total = duration.inMilliseconds.toDouble();
     final current = position.inMilliseconds.toDouble();
+    final hasVideo = total > 0;
+
+    final sliderValue = hasVideo
+        ? current.clamp(0.0, total).toDouble()
+        : 0.0;
 
     return Container(
       width: double.infinity,
@@ -80,15 +89,15 @@ class VideoControls extends StatelessWidget {
               trackHeight: 3,
             ),
             child: Slider(
-              value: total <= 0
-                  ? 0
-                  : current.clamp(0.0, total).toDouble(),
-              max: total <= 0 ? 1 : total,
-              onChanged: total <= 0
-                  ? null
-                  : (v) => onSeek(
-                        Duration(milliseconds: v.round()),
-                      ),
+              value: sliderValue,
+              max: hasVideo ? total : 1,
+              onChanged: hasVideo
+                  ? (value) {
+                      onSeek(
+                        Duration(milliseconds: value.round()),
+                      );
+                    }
+                  : null,
             ),
           ),
 
@@ -118,14 +127,14 @@ class VideoControls extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               IconButton(
-                onPressed: () => skip(-10),
+                onPressed: hasVideo ? () => skip(-10) : null,
                 icon: const Icon(Icons.replay_10),
                 color: Colors.white,
                 tooltip: 'تراجع 10 ثوانٍ',
               ),
 
               IconButton(
-                onPressed: onPlayPause,
+                onPressed: hasVideo ? onPlayPause : null,
                 iconSize: 48,
                 icon: Icon(
                   playing
@@ -137,7 +146,7 @@ class VideoControls extends StatelessWidget {
               ),
 
               IconButton(
-                onPressed: () => skip(10),
+                onPressed: hasVideo ? () => skip(10) : null,
                 icon: const Icon(Icons.forward_10),
                 color: Colors.white,
                 tooltip: 'تقديم 10 ثوانٍ',
@@ -158,32 +167,32 @@ class VideoControls extends StatelessWidget {
               ),
 
               IconButton(
-                onPressed: onRotate,
+                onPressed: hasVideo ? onRotate : null,
                 icon: const Icon(Icons.screen_rotation),
                 color: Colors.white70,
                 tooltip: 'ملء الشاشة',
               ),
 
               IconButton(
-                onPressed: onRepeat,
+                onPressed: hasVideo ? onRepeat : null,
                 icon: Icon(
                   Icons.repeat,
                   color: repeat
                       ? const Color(0xFFE05268)
                       : Colors.white70,
                 ),
-                tooltip: 'تكرار',
+                tooltip: repeat ? 'إيقاف التكرار' : 'تكرار الفيديو',
               ),
 
               IconButton(
-                onPressed: onSubtitle,
+                onPressed: hasVideo ? onSubtitle : null,
                 icon: const Icon(Icons.subtitles),
                 color: Colors.white70,
                 tooltip: 'الترجمة والصوت',
               ),
 
               IconButton(
-                onPressed: onMode,
+                onPressed: hasVideo ? onMode : null,
                 icon: const Icon(Icons.memory),
                 color: Colors.white70,
                 tooltip: 'وضع الترميز',
@@ -192,9 +201,11 @@ class VideoControls extends StatelessWidget {
               PopupMenuButton<double>(
                 initialValue: speed,
                 tooltip: 'سرعة التشغيل',
+                enabled: hasVideo,
                 color: const Color(0xFF292B31),
                 onSelected: onSpeed,
                 itemBuilder: (context) => [
+                  0.25,
                   0.5,
                   0.75,
                   1.0,
@@ -202,12 +213,16 @@ class VideoControls extends StatelessWidget {
                   1.5,
                   1.75,
                   2.0,
+                  2.5,
+                  3.0,
                 ].map((value) {
                   return PopupMenuItem<double>(
                     value: value,
                     child: Text(
                       '${value}x',
-                      style: const TextStyle(color: Colors.white),
+                      style: const TextStyle(
+                        color: Colors.white,
+                      ),
                     ),
                   );
                 }).toList(),
