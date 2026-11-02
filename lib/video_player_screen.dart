@@ -1,10 +1,13 @@
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'video_engine.dart';
 import 'video_controls.dart';
@@ -23,376 +26,618 @@ class VideoPlayerScreen extends StatefulWidget {
   State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
 }
 
-class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
+class _VideoPlayerScreenState extends State<VideoPlayerScreen>
+    with WidgetsBindingObserver {
   late VideoEngine engine;
 
   String? currentPath;
+
   bool hwPlus = false;
   bool repeat = false;
   bool fullscreen = false;
   bool opening = false;
+  bool locked = false;
+  bool controlsVisible = true;
 
   double volume = 100;
   double speed = 1.0;
 
+  Timer? _saveTimer;
+  Timer? _hideControlsTimer;
+
+  static const String _lastPathKey = 'burhan_last_video_path';
+  static const String _lastPositionKey = 'burhan_last_video_position';
+
   @override
   void initState() {
     super.initState();
+
+    WidgetsBinding.instance.addObserver(this);
+
     engine = VideoEngine();
 
-    if (widget.initialPath != null) {
+    _saveTimer = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => _saveProgress(),
+    );
+
+    if (widget.initialPath != null &&
+        widget.initialPath!.trim().isNotEmpty) {
       currentPath = widget.initialPath;
-      opening = true;
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        openInitialVideo();
+        _openInitialVideo();
       });
     }
   }
 
-  Future<void> openInitialVideo() async {
+  void _showMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  Future<void> _openInitialVideo() async {
     final path = widget.initialPath;
-    if (path == null) return;
+
+    if (path == null || path.trim().isEmpty || opening) return;
+
+    setState(() {
+      opening = true;
+    });
 
     try {
+      final preferences = await SharedPreferences.getInstance();
+
+      final savedPath = preferences.getString(_lastPathKey);
+      final savedPosition =
+          preferences.getInt(_lastPositionKey) ?? 0;
+
       await engine.open(path);
       await engine.setVolume(volume);
       await engine.setSpeed(speed);
-      await WakelockPlus.enable();
-    } catch (e) {
-      if (!mounted) return;
+      await engine.setRepeat(repeat);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تعذر تشغيل الفيديو: $e')),
-      );
+      if (savedPath == path && savedPosition > 0) {
+        await engine.seek(
+          Duration(milliseconds: savedPosition),
+        );
+      }
+
+      await WakelockPlus.enable();
+    } catch (error) {
+      _showMessage('تعذر تشغيل الفيديو: $error');
     } finally {
       if (mounted) {
-        setState(() => opening = false);
+        setState(() {
+          opening = false;
+        });
       }
     }
   }
 
-  Future<void> openVideo() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.video,
-    );
-
-    if (result == null || result.files.single.path == null) return;
-
-    final path = result.files.single.path!;
+  Future<void> _openVideo() async {
+    if (opening) return;
 
     try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.video,
+      );
+
+      if (!mounted || result == null || result.files.isEmpty) {
+        return;
+      }
+
+      final path = result.files.single.path;
+
+      if (path == null || path.trim().isEmpty) {
+        _showMessage('تعذر الوصول إلى ملف الفيديو.');
+        return;
+      }
+
       setState(() {
-        currentPath = path;
         opening = true;
       });
 
       await engine.open(path);
       await engine.setVolume(volume);
       await engine.setSpeed(speed);
-      await WakelockPlus.enable();
-    } catch (e) {
+      await engine.setRepeat(repeat);
+
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تعذر فتح الفيديو: $e')),
-      );
+      setState(() {
+        currentPath = path;
+      });
+
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(_lastPathKey, path);
+      await preferences.setInt(_lastPositionKey, 0);
+
+      await WakelockPlus.enable();
+    } catch (error) {
+      _showMessage('تعذر فتح الفيديو: $error');
     } finally {
       if (mounted) {
-        setState(() => opening = false);
+        setState(() {
+          opening = false;
+        });
       }
     }
   }
 
-  Future<void> openSubtitle() async {
-    if (currentPath == null || opening) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('افتح فيديو أولاً.')),
+  Future<void> _saveProgress() async {
+    if (currentPath == null || opening || !mounted) return;
+
+    try {
+      final position = engine.player.state.position;
+      final preferences = await SharedPreferences.getInstance();
+
+      await preferences.setString(_lastPathKey, currentPath!);
+      await preferences.setInt(
+        _lastPositionKey,
+        position.inMilliseconds,
       );
+    } catch (_) {
+      // تجاهل أخطاء الحفظ المؤقتة.
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _saveProgress();
+    }
+  }
+
+  Future<void> _openSubtitle() async {
+    if (currentPath == null || opening) {
+      _showMessage('افتح فيديو أولاً.');
       return;
     }
 
     await showSubtitleAudioPanel(context, engine.player);
   }
 
-  Future<void> changeSpeed(double value) async {
+  Future<void> _changeSpeed(double value) async {
     try {
       await engine.setSpeed(value);
 
-      if (mounted) {
-        setState(() => speed = value);
-      }
-    } catch (e) {
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تعذر تغيير السرعة: $e')),
-      );
+      setState(() {
+        speed = value;
+      });
+    } catch (error) {
+      _showMessage('تعذر تغيير السرعة: $error');
     }
   }
 
-  Future<void> changeMode() async {
-    if (currentPath == null || opening) {
-      if (currentPath == null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('افتح فيديو أولاً.')),
-        );
-      }
-      return;
-    }
+  Future<void> _changeMode() async {
+    if (currentPath == null || opening) return;
 
-    final oldPosition = engine.player.state.position;
-    final wasPlaying = engine.player.state.playing;
+    final oldEngine = engine;
     final path = currentPath!;
+    final oldPosition = oldEngine.player.state.position;
+    final wasPlaying = oldEngine.player.state.playing;
     final newMode = !hwPlus;
 
-    setState(() => opening = true);
+    VideoEngine? newEngine;
+
+    setState(() {
+      opening = true;
+    });
 
     try {
-      await engine.dispose();
+      newEngine = VideoEngine(hwPlus: newMode);
 
-      engine = VideoEngine(hwPlus: newMode);
-      hwPlus = newMode;
-
-      await engine.open(path);
-      await engine.seek(oldPosition);
-      await engine.setVolume(volume);
-      await engine.setSpeed(speed);
-      await engine.setRepeat(repeat);
+      await newEngine.open(path);
+      await newEngine.seek(oldPosition);
+      await newEngine.setVolume(volume);
+      await newEngine.setSpeed(speed);
+      await newEngine.setRepeat(repeat);
 
       if (wasPlaying) {
-        await engine.player.play();
+        await newEngine.play();
       }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('تعذر تغيير وضع الترميز: $e')),
-        );
+
+      if (!mounted) {
+        await newEngine.dispose();
+        return;
       }
+
+      setState(() {
+        engine = newEngine!;
+        hwPlus = newMode;
+      });
+
+      await oldEngine.dispose();
+
+      _showMessage(
+        newMode
+            ? 'تم التبديل إلى وضع HW+.'
+            : 'تم التبديل إلى وضع HW.',
+      );
+    } catch (error) {
+      if (newEngine != null) {
+        await newEngine.dispose();
+      }
+
+      _showMessage('تعذر تغيير وضع فك الترميز: $error');
     } finally {
       if (mounted) {
-        setState(() => opening = false);
+        setState(() {
+          opening = false;
+        });
       }
     }
   }
 
-  Future<void> toggleRepeat() async {
-    repeat = !repeat;
-    await engine.setRepeat(repeat);
+  Future<void> _toggleRepeat() async {
+    if (opening) return;
 
-    if (mounted) setState(() {});
+    final newValue = !repeat;
+
+    try {
+      await engine.setRepeat(newValue);
+
+      if (!mounted) return;
+
+      setState(() {
+        repeat = newValue;
+      });
+    } catch (error) {
+      _showMessage('تعذر تغيير وضع التكرار: $error');
+    }
   }
 
-  Future<void> rotate() async {
-    fullscreen = !fullscreen;
+  Future<void> _toggleFullscreen() async {
+    if (opening) return;
 
-    await SystemChrome.setEnabledSystemUIMode(
-      fullscreen
-          ? SystemUiMode.immersiveSticky
-          : SystemUiMode.edgeToEdge,
-    );
+    final newValue = !fullscreen;
 
-    await SystemChrome.setPreferredOrientations(
-      fullscreen
-          ? [
-              DeviceOrientation.landscapeLeft,
-              DeviceOrientation.landscapeRight,
-            ]
-          : [
-              DeviceOrientation.portraitUp,
-            ],
-    );
+    try {
+      await SystemChrome.setEnabledSystemUIMode(
+        newValue
+            ? SystemUiMode.immersiveSticky
+            : SystemUiMode.edgeToEdge,
+      );
 
-    if (mounted) setState(() {});
+      await SystemChrome.setPreferredOrientations(
+        newValue
+            ? [
+                DeviceOrientation.landscapeLeft,
+                DeviceOrientation.landscapeRight,
+              ]
+            : [
+                DeviceOrientation.portraitUp,
+              ],
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        fullscreen = newValue;
+        controlsVisible = true;
+      });
+
+      _scheduleHideControls();
+    } catch (error) {
+      _showMessage('تعذر تغيير وضع الشاشة: $error');
+    }
   }
 
-  String fileName(String? path) {
-    if (path == null) return 'Burhan Plyer';
-    return path.split('/').last;
+  void _revealControls() {
+    if (!fullscreen || locked) return;
+
+    if (!controlsVisible) {
+      setState(() {
+        controlsVisible = true;
+      });
+    }
+
+    _scheduleHideControls();
+  }
+
+  void _scheduleHideControls() {
+    _hideControlsTimer?.cancel();
+
+    if (!fullscreen || locked || !controlsVisible) return;
+
+    _hideControlsTimer = Timer(
+      const Duration(seconds: 4),
+      () {
+        if (!mounted || !fullscreen || locked) return;
+
+        setState(() {
+          controlsVisible = false;
+        });
+      },
+    );
+  }
+
+  void _toggleLock() {
+    setState(() {
+      locked = !locked;
+      controlsVisible = true;
+    });
+
+    _hideControlsTimer?.cancel();
+
+    if (!locked) {
+      _scheduleHideControls();
+    }
+  }
+
+  Future<bool> _handleBack() async {
+    if (locked) {
+      setState(() {
+        locked = false;
+        controlsVisible = true;
+      });
+      return false;
+    }
+
+    if (fullscreen) {
+      await _toggleFullscreen();
+      return false;
+    }
+
+    return true;
+  }
+
+  String get fileName {
+    if (currentPath == null) return 'Burhan Plyer';
+
+    final parts = currentPath!.split(RegExp(r'[/\\]'));
+    return parts.isEmpty ? currentPath! : parts.last;
+  }
+
+  Widget _buildVideoArea() {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (locked)
+          Video(
+            controller: engine.controller,
+            controls: NoVideoControls,
+            subtitleViewConfiguration:
+                const SubtitleViewConfiguration(
+              style: TextStyle(
+                fontSize: 22,
+                color: Colors.white,
+                backgroundColor: Colors.black54,
+              ),
+            ),
+          )
+        else
+          Listener(
+            onPointerDown: (_) => _revealControls(),
+            child: GestureControls(
+              position: engine.player.state.position,
+              duration: engine.player.state.duration,
+              volume: volume,
+              onSeek: (position) => engine.seek(position),
+              onVolume: (value) {
+                setState(() {
+                  volume = value;
+                });
+
+                engine.setVolume(value);
+              },
+              child: Video(
+                controller: engine.controller,
+                controls: NoVideoControls,
+                subtitleViewConfiguration:
+                    const SubtitleViewConfiguration(
+                  style: TextStyle(
+                    fontSize: 22,
+                    color: Colors.white,
+                    backgroundColor: Colors.black54,
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+        if (opening)
+          Container(
+            color: Colors.black54,
+            child: const Center(
+              child: CircularProgressIndicator(),
+            ),
+          ),
+
+        if (fullscreen && controlsVisible)
+          Positioned(
+            top: 12,
+            right: 12,
+            child: SafeArea(
+              child: IconButton.filledTonal(
+                onPressed: _toggleFullscreen,
+                icon: const Icon(Icons.fullscreen_exit),
+                tooltip: 'إنهاء ملء الشاشة',
+              ),
+            ),
+          ),
+
+        if (fullscreen && controlsVisible)
+          Positioned(
+            top: 12,
+            left: 12,
+            child: SafeArea(
+              child: IconButton.filledTonal(
+                onPressed: _toggleLock,
+                icon: Icon(
+                  locked ? Icons.lock_open : Icons.lock,
+                ),
+                tooltip: locked ? 'إلغاء القفل' : 'قفل الشاشة',
+              ),
+            ),
+          ),
+
+        if (fullscreen && locked && !controlsVisible)
+          const SizedBox.shrink(),
+
+        if (fullscreen && locked)
+          Positioned(
+            top: 12,
+            left: 12,
+            child: SafeArea(
+              child: IconButton.filledTonal(
+                onPressed: _toggleLock,
+                icon: const Icon(Icons.lock_open),
+                tooltip: 'إلغاء قفل الشاشة',
+              ),
+            ),
+          ),
+
+        if (fullscreen && controlsVisible && !locked)
+          Positioned(
+            left: 8,
+            right: 8,
+            bottom: 8,
+            child: SafeArea(
+              child: _buildControls(),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildControls() {
+    return StreamBuilder<bool>(
+      stream: engine.player.stream.playing,
+      initialData: engine.player.state.playing,
+      builder: (context, playingSnapshot) {
+        return StreamBuilder<Duration>(
+          stream: engine.player.stream.position,
+          initialData: engine.player.state.position,
+          builder: (context, positionSnapshot) {
+            return StreamBuilder<Duration>(
+              stream: engine.player.stream.duration,
+              initialData: engine.player.state.duration,
+              builder: (context, durationSnapshot) {
+                return VideoControls(
+                  position: positionSnapshot.data ?? Duration.zero,
+                  duration: durationSnapshot.data ?? Duration.zero,
+                  playing: playingSnapshot.data ?? false,
+                  repeat: repeat,
+                  speed: speed,
+                  onPlayPause: () => engine.playPause(),
+                  onRepeat: _toggleRepeat,
+                  onRotate: _toggleFullscreen,
+                  onSeek: (position) => engine.seek(position),
+                  onOpenFile: _openVideo,
+                  onSubtitle: _openSubtitle,
+                  onMode: _changeMode,
+                  onSpeed: _changeSpeed,
+                );
+              },
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+
+    _saveTimer?.cancel();
+    _hideControlsTimer?.cancel();
+
+    _saveProgress();
+
     WakelockPlus.disable();
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    SystemChrome.setPreferredOrientations(
-      [DeviceOrientation.portraitUp],
+
+    SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.edgeToEdge,
     );
+
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+    ]);
+
     engine.dispose();
+
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF101114),
-      body: SafeArea(
-        top: !fullscreen,
-        bottom: !fullscreen,
-        child: Column(
-          children: [
-            if (!fullscreen)
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 10,
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.play_circle_fill,
-                      color: Color(0xFFE0A0AA),
-                      size: 30,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        fileName(currentPath),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
+    return WillPopScope(
+      onWillPop: _handleBack,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
+          top: !fullscreen,
+          bottom: !fullscreen,
+          child: Column(
+            children: [
+              if (!fullscreen)
+                Container(
+                  height: 54,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        onPressed: () => Navigator.maybePop(context),
+                        icon: const Icon(Icons.arrow_back),
+                      ),
+                      Expanded(
+                        child: Text(
+                          fileName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
-                    ),
-                    TextButton(
-                      onPressed: opening ? null : changeMode,
-                      child: Text(
-                        hwPlus ? 'HW+' : 'HW',
-                        style: const TextStyle(
-                          color: Color(0xFFE0A0AA),
-                          fontWeight: FontWeight.bold,
-                        ),
+                      IconButton(
+                        onPressed: _openVideo,
+                        icon: const Icon(Icons.folder_open),
+                        tooltip: 'فتح فيديو',
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
 
-            Expanded(
-              child: Container(
-                color: Colors.black,
-                width: double.infinity,
+              Expanded(
                 child: currentPath == null
                     ? Center(
-                        child: ElevatedButton.icon(
-                          onPressed: openVideo,
-                          icon: const Icon(Icons.folder_open),
-                          label: const Text('اختر فيديو'),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.video_library_outlined,
+                              size: 70,
+                              color: Colors.white54,
+                            ),
+                            const SizedBox(height: 16),
+                            const Text('اختر فيديو لبدء المشاهدة'),
+                            const SizedBox(height: 16),
+                            FilledButton.icon(
+                              onPressed: opening ? null : _openVideo,
+                              icon: const Icon(Icons.folder_open),
+                              label: const Text('اختيار فيديو'),
+                            ),
+                          ],
                         ),
                       )
-                    : Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          StreamBuilder<Duration>(
-                            stream: engine.player.stream.position,
-                            builder: (context, snapshot) {
-                              final position =
-                                  snapshot.data ?? Duration.zero;
-
-                              return StreamBuilder<Duration>(
-                                stream: engine.player.stream.duration,
-                                builder: (context, durationSnapshot) {
-                                  final duration =
-                                      durationSnapshot.data ?? Duration.zero;
-
-                                  return GestureControls(
-                                    position: position,
-                                    duration: duration,
-                                    volume: volume,
-                                    onSeek: (value) {
-                                      engine.seek(value);
-                                    },
-                                    onVolume: (value) {
-                                      volume = value;
-                                      engine.setVolume(value);
-                                    },
-                                    child: Video(
-                                      controller: engine.controller,
-                                      controls: NoVideoControls,
-                                      subtitleViewConfiguration:
-                                          const SubtitleViewConfiguration(
-                                        style: TextStyle(
-                                          fontSize: 22,
-                                          color: Colors.white,
-                                          backgroundColor:
-                                              Color(0xAA000000),
-                                        ),
-                                        textAlign: TextAlign.center,
-                                        padding: EdgeInsets.all(20),
-                                      ),
-                                    ),
-                                  );
-                                },
-                              );
-                            },
-                          ),
-
-                          if (opening)
-                            Container(
-                              color: Colors.black54,
-                              child: const Center(
-                                child: CircularProgressIndicator(
-                                  color: Color(0xFFE0A0AA),
-                                ),
-                              ),
-                            ),
-
-                          if (fullscreen)
-                            Positioned(
-                              top: 12,
-                              right: 12,
-                              child: IconButton(
-                                onPressed: rotate,
-                                icon: const Icon(
-                                  Icons.fullscreen_exit,
-                                  color: Colors.white,
-                                  size: 30,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
+                    : _buildVideoArea(),
               ),
-            ),
 
-            if (!fullscreen)
-              StreamBuilder<bool>(
-                stream: engine.player.stream.playing,
-                builder: (context, snapshot) {
-                  final playing = snapshot.data ?? false;
-
-                  return StreamBuilder<Duration>(
-                    stream: engine.player.stream.position,
-                    builder: (context, positionSnapshot) {
-                      return StreamBuilder<Duration>(
-                        stream: engine.player.stream.duration,
-                        builder: (context, durationSnapshot) {
-                          return VideoControls(
-                            position:
-                                positionSnapshot.data ?? Duration.zero,
-                            duration:
-                                durationSnapshot.data ?? Duration.zero,
-                            playing: playing,
-                            repeat: repeat,
-                            speed: speed,
-                            onSpeed: changeSpeed,
-                            onPlayPause: () => engine.playPause(),
-                            onRepeat: toggleRepeat,
-                            onRotate: rotate,
-                            onSeek: engine.seek,
-                            onOpenFile: openVideo,
-                            onSubtitle: openSubtitle,
-                            onMode: changeMode,
-                          );
-                        },
-                      );
-                    },
-                  );
-                },
-              ),
-          ],
+              if (!fullscreen && currentPath != null)
+                _buildControls(),
+            ],
+          ),
         ),
       ),
     );
