@@ -153,6 +153,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       });
 
       final preferences = await SharedPreferences.getInstance();
+
       await preferences.setString(_lastPathKey, path);
       await preferences.setInt(_lastPositionKey, 0);
 
@@ -169,17 +170,17 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
   }
 
   Future<void> _saveProgress() async {
-    if (currentPath == null || opening || !mounted) return;
+    final path = currentPath;
+
+    if (path == null || opening) return;
+
+    final position = engine.player.state.position.inMilliseconds;
 
     try {
-      final position = engine.player.state.position;
       final preferences = await SharedPreferences.getInstance();
 
-      await preferences.setString(_lastPathKey, currentPath!);
-      await preferences.setInt(
-        _lastPositionKey,
-        position.inMilliseconds,
-      );
+      await preferences.setString(_lastPathKey, path);
+      await preferences.setInt(_lastPositionKey, position);
     } catch (_) {
       // تجاهل أخطاء الحفظ المؤقتة.
     }
@@ -417,30 +418,43 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         else
           Listener(
             onPointerDown: (_) => _revealControls(),
-            child: GestureControls(
-              position: engine.player.state.position,
-              duration: engine.player.state.duration,
-              volume: volume,
-              onSeek: (position) => engine.seek(position),
-              onVolume: (value) {
-                setState(() {
-                  volume = value;
-                });
-
-                engine.setVolume(value);
+            child: StreamBuilder<Duration>(
+              stream: engine.player.stream.position,
+              initialData: engine.player.state.position,
+              builder: (context, positionSnapshot) {
+                return StreamBuilder<Duration>(
+                  stream: engine.player.stream.duration,
+                  initialData: engine.player.state.duration,
+                  builder: (context, durationSnapshot) {
+                    return GestureControls(
+                      position:
+                          positionSnapshot.data ?? Duration.zero,
+                      duration:
+                          durationSnapshot.data ?? Duration.zero,
+                      volume: volume,
+                      onSeek: (position) => engine.seek(position),
+                      onVolume: (value) {
+                        setState(() {
+                          volume = value;
+                        });
+                        engine.setVolume(value);
+                      },
+                      child: Video(
+                        controller: engine.controller,
+                        controls: NoVideoControls,
+                        subtitleViewConfiguration:
+                            const SubtitleViewConfiguration(
+                          style: TextStyle(
+                            fontSize: 22,
+                            color: Colors.white,
+                            backgroundColor: Colors.black54,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                );
               },
-              child: Video(
-                controller: engine.controller,
-                controls: NoVideoControls,
-                subtitleViewConfiguration:
-                    const SubtitleViewConfiguration(
-                  style: TextStyle(
-                    fontSize: 22,
-                    color: Colors.white,
-                    backgroundColor: Colors.black54,
-                  ),
-                ),
-              ),
             ),
           ),
 
@@ -465,7 +479,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
             ),
           ),
 
-        if (fullscreen && controlsVisible)
+        if (fullscreen && (controlsVisible || locked))
           Positioned(
             top: 12,
             left: 12,
@@ -476,22 +490,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                   locked ? Icons.lock_open : Icons.lock,
                 ),
                 tooltip: locked ? 'إلغاء القفل' : 'قفل الشاشة',
-              ),
-            ),
-          ),
-
-        if (fullscreen && locked && !controlsVisible)
-          const SizedBox.shrink(),
-
-        if (fullscreen && locked)
-          Positioned(
-            top: 12,
-            left: 12,
-            child: SafeArea(
-              child: IconButton.filledTonal(
-                onPressed: _toggleLock,
-                icon: const Icon(Icons.lock_open),
-                tooltip: 'إلغاء قفل الشاشة',
               ),
             ),
           ),
@@ -643,3 +641,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     );
   }
 }
+```
+
+**هام:** هذا الكود يعالج المشاكل الثلاث المحددة، لكنه ليس اعتمادًا نهائيًا على خلو الملف من كل مشاكل التكامل. يوجد bug إضافي في `changeMode`: لو `oldEngine.dispose()` throws بعد استبدال `engine`, catch يحاول dispose `newEngine` التي أصبحت المحرك الحالي؛ يجب إصلاح ذلك في مراجعة شاملة. كذلك `_saveProgress()` في `dispose()` لا ينتظر اكتمال الحفظ ثم يتم التخلص من المحرك، لكنه يأخذ snapshot قبل await. أمان فتح ملف جديد عند فشل `engine.open` يحتاج معالجة. لا نعلن نجاح البناء.
+
+## الخطوة التالية
+اطلب من المستخدم لصق الكود الكامل في `video_player_screen.dart`، ثم يقول "تم". بعدها نكمل مراجعة الملفات الأخرى. الملف التالي غالبًا `subtitle_audio_panel.dart` لإصلاح bug الـ`busy/message` المعرّف داخل `StatefulBuilder.builder` مما يعيد ضبطهما عند كل rebuild. ثم تدقيق نهائي لـ`main.dart`, `pubspec.yaml`, AndroidManifest, Gradle وواجهات API، وبعدها فقط `flutter pub get` ثم build.
+
+# تفضيلات أخرى مهمة
+- مشاريع سابقة: تطبيق Mr Otaku، تطبيق البريهي التعليمي، تطبيق ذاكرة الأوتاكو.
+- في صور القصص، كل شخصيات بشرية/شبيهة بالبشر بلا ملامح وجه واضحة (العيون والفم محذوفة/مخفية/مموهة)، إلا إذا طلب ملامح محددة صراحة.
+- يفضل صور عمودية 3:4 لقصصه.
+- يفضل العمل دون إنترنت متى أمكن، وتعليمات عربية للهاتف.
+- الاسم الشخصي لا تستخدمه في المخاطبة إلا إذا طلب ذلك.
