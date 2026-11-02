@@ -61,10 +61,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       (_) => _saveProgress(),
     );
 
-    if (widget.initialPath != null &&
-        widget.initialPath!.trim().isNotEmpty) {
-      currentPath = widget.initialPath;
+    final path = widget.initialPath;
 
+    if (path != null && path.trim().isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _openInitialVideo();
       });
@@ -77,6 +76,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
+  }
+
+  Future<void> _configureEngine(VideoEngine target) async {
+    await target.setVolume(volume);
+    await target.setSpeed(speed);
+    await target.setRepeat(repeat);
   }
 
   Future<void> _openInitialVideo() async {
@@ -96,9 +101,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
           preferences.getInt(_lastPositionKey) ?? 0;
 
       await engine.open(path);
-      await engine.setVolume(volume);
-      await engine.setSpeed(speed);
-      await engine.setRepeat(repeat);
+      await _configureEngine(engine);
 
       if (savedPath == path && savedPosition > 0) {
         await engine.seek(
@@ -107,6 +110,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
       }
 
       await WakelockPlus.enable();
+
+      if (!mounted) return;
+
+      setState(() {
+        currentPath = path;
+      });
     } catch (error) {
       _showMessage('تعذر تشغيل الفيديو: $error');
     } finally {
@@ -120,6 +129,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
   Future<void> _openVideo() async {
     if (opening) return;
+
+    VideoEngine? candidate;
+
+    setState(() {
+      opening = true;
+    });
 
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -137,30 +152,50 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
         return;
       }
 
-      setState(() {
-        opening = true;
-      });
+      // نجهز مشغلاً جديداً قبل المساس بالمشغل الحالي.
+      candidate = VideoEngine(hwPlus: hwPlus);
 
-      await engine.open(path);
-      await engine.setVolume(volume);
-      await engine.setSpeed(speed);
-      await engine.setRepeat(repeat);
+      await candidate.open(path);
+      await _configureEngine(candidate);
 
       if (!mounted) return;
+
+      final oldEngine = engine;
+
+      // نقل الملكية إلى المحرك الجديد.
+      engine = candidate;
+      candidate = null;
 
       setState(() {
         currentPath = path;
       });
 
-      final preferences = await SharedPreferences.getInstance();
-
-      await preferences.setString(_lastPathKey, path);
-      await preferences.setInt(_lastPositionKey, 0);
-
       await WakelockPlus.enable();
+
+      // فشل حفظ التفضيلات لا يعني فشل فتح الفيديو.
+      try {
+        final preferences = await SharedPreferences.getInstance();
+        await preferences.setString(_lastPathKey, path);
+        await preferences.setInt(_lastPositionKey, 0);
+      } catch (_) {
+        _showMessage('تم فتح الفيديو، لكن تعذر حفظ بياناته.');
+      }
+
+      // التخلص من المحرك السابق بعد نجاح الاستبدال.
+      try {
+        await oldEngine.dispose();
+      } catch (error) {
+        _showMessage('تعذر إغلاق المشغل السابق: $error');
+      }
     } catch (error) {
       _showMessage('تعذر فتح الفيديو: $error');
     } finally {
+      if (candidate != null) {
+        try {
+          await candidate.dispose();
+        } catch (_) {}
+      }
+
       if (mounted) {
         setState(() {
           opening = false;
@@ -174,6 +209,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
 
     if (path == null || opening) return;
 
+    // نأخذ لقطة من الموضع قبل بدء الحفظ غير المتزامن.
     final position = engine.player.state.position.inMilliseconds;
 
     try {
@@ -191,7 +227,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
-      _saveProgress();
+      unawaited(_saveProgress());
     }
   }
 
@@ -218,6 +254,20 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     }
   }
 
+  Future<void> _changeVolume(double value) async {
+    try {
+      await engine.setVolume(value);
+
+      if (!mounted) return;
+
+      setState(() {
+        volume = value;
+      });
+    } catch (error) {
+      _showMessage('تعذر تغيير مستوى الصوت: $error');
+    }
+  }
+
   Future<void> _changeMode() async {
     if (currentPath == null || opening) return;
 
@@ -227,36 +277,40 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     final wasPlaying = oldEngine.player.state.playing;
     final newMode = !hwPlus;
 
-    VideoEngine? newEngine;
+    VideoEngine? candidate;
 
     setState(() {
       opening = true;
     });
 
     try {
-      newEngine = VideoEngine(hwPlus: newMode);
+      candidate = VideoEngine(hwPlus: newMode);
 
-      await newEngine.open(path);
-      await newEngine.seek(oldPosition);
-      await newEngine.setVolume(volume);
-      await newEngine.setSpeed(speed);
-      await newEngine.setRepeat(repeat);
+      await candidate.open(path);
+      await candidate.seek(oldPosition);
+      await _configureEngine(candidate);
 
       if (wasPlaying) {
-        await newEngine.play();
+        await candidate.play();
       }
 
-      if (!mounted) {
-        await newEngine.dispose();
-        return;
-      }
+      if (!mounted) return;
+
+      // استبدال المحرك بعد نجاح جميع خطوات التجهيز.
+      engine = candidate;
+      candidate = null;
 
       setState(() {
-        engine = newEngine!;
         hwPlus = newMode;
       });
 
-      await oldEngine.dispose();
+      // لا نحذف المحرك الجديد إذا تعذر التخلص من القديم.
+      try {
+        await oldEngine.dispose();
+      } catch (error) {
+        _showMessage('تم تغيير الوضع، لكن تعذر إغلاق المحرك السابق: $error');
+        return;
+      }
 
       _showMessage(
         newMode
@@ -264,12 +318,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
             : 'تم التبديل إلى وضع HW.',
       );
     } catch (error) {
-      if (newEngine != null) {
-        await newEngine.dispose();
-      }
-
       _showMessage('تعذر تغيير وضع فك الترميز: $error');
     } finally {
+      if (candidate != null) {
+        try {
+          await candidate.dispose();
+        } catch (_) {}
+      }
+
       if (mounted) {
         setState(() {
           opening = false;
@@ -433,12 +489,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                           durationSnapshot.data ?? Duration.zero,
                       volume: volume,
                       onSeek: (position) => engine.seek(position),
-                      onVolume: (value) {
-                        setState(() {
-                          volume = value;
-                        });
-                        engine.setVolume(value);
-                      },
+                      onVolume: _changeVolume,
                       child: Video(
                         controller: engine.controller,
                         controls: NoVideoControls,
@@ -550,19 +601,24 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     _saveTimer?.cancel();
     _hideControlsTimer?.cancel();
 
-    _saveProgress();
+    // يبدأ الحفظ بأخذ لقطة الموضع قبل التخلص من المحرك.
+    unawaited(_saveProgress());
 
-    WakelockPlus.disable();
+    unawaited(WakelockPlus.disable());
 
-    SystemChrome.setEnabledSystemUIMode(
-      SystemUiMode.edgeToEdge,
+    unawaited(
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.edgeToEdge,
+      ),
     );
 
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-    ]);
+    unawaited(
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+      ]),
+    );
 
-    engine.dispose();
+    unawaited(engine.dispose());
 
     super.dispose();
   }
@@ -599,7 +655,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
                         ),
                       ),
                       IconButton(
-                        onPressed: _openVideo,
+                        onPressed: opening ? null : _openVideo,
                         icon: const Icon(Icons.folder_open),
                         tooltip: 'فتح فيديو',
                       ),
@@ -641,16 +697,3 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen>
     );
   }
 }
-```
-
-**هام:** هذا الكود يعالج المشاكل الثلاث المحددة، لكنه ليس اعتمادًا نهائيًا على خلو الملف من كل مشاكل التكامل. يوجد bug إضافي في `changeMode`: لو `oldEngine.dispose()` throws بعد استبدال `engine`, catch يحاول dispose `newEngine` التي أصبحت المحرك الحالي؛ يجب إصلاح ذلك في مراجعة شاملة. كذلك `_saveProgress()` في `dispose()` لا ينتظر اكتمال الحفظ ثم يتم التخلص من المحرك، لكنه يأخذ snapshot قبل await. أمان فتح ملف جديد عند فشل `engine.open` يحتاج معالجة. لا نعلن نجاح البناء.
-
-## الخطوة التالية
-اطلب من المستخدم لصق الكود الكامل في `video_player_screen.dart`، ثم يقول "تم". بعدها نكمل مراجعة الملفات الأخرى. الملف التالي غالبًا `subtitle_audio_panel.dart` لإصلاح bug الـ`busy/message` المعرّف داخل `StatefulBuilder.builder` مما يعيد ضبطهما عند كل rebuild. ثم تدقيق نهائي لـ`main.dart`, `pubspec.yaml`, AndroidManifest, Gradle وواجهات API، وبعدها فقط `flutter pub get` ثم build.
-
-# تفضيلات أخرى مهمة
-- مشاريع سابقة: تطبيق Mr Otaku، تطبيق البريهي التعليمي، تطبيق ذاكرة الأوتاكو.
-- في صور القصص، كل شخصيات بشرية/شبيهة بالبشر بلا ملامح وجه واضحة (العيون والفم محذوفة/مخفية/مموهة)، إلا إذا طلب ملامح محددة صراحة.
-- يفضل صور عمودية 3:4 لقصصه.
-- يفضل العمل دون إنترنت متى أمكن، وتعليمات عربية للهاتف.
-- الاسم الشخصي لا تستخدمه في المخاطبة إلا إذا طلب ذلك.
