@@ -26,7 +26,6 @@ class GestureControls extends StatefulWidget {
 
 class _GestureControlsState extends State<GestureControls> {
   String? action;
-  double value = 0;
 
   double startX = 0;
   double startY = 0;
@@ -36,10 +35,13 @@ class _GestureControlsState extends State<GestureControls> {
   Duration startPosition = Duration.zero;
   Duration previewPosition = Duration.zero;
 
+  double previewValue = 0;
+
   bool brightnessReady = false;
   bool readingBrightness = false;
+  bool brightnessFailed = false;
 
-  Future<void> startGesture(DragStartDetails details) async {
+  void startGesture(DragStartDetails details) {
     startX = details.localPosition.dx;
     startY = details.localPosition.dy;
 
@@ -50,13 +52,14 @@ class _GestureControlsState extends State<GestureControls> {
     action = null;
     brightnessReady = false;
     readingBrightness = false;
-    value = 0;
+    brightnessFailed = false;
+    previewValue = 0;
   }
 
-  Future<void> updateGesture(
+  void updateGesture(
     DragUpdateDetails details,
     BoxConstraints constraints,
-  ) async {
+  ) {
     if (constraints.maxWidth <= 0 || constraints.maxHeight <= 0) {
       return;
     }
@@ -67,45 +70,41 @@ class _GestureControlsState extends State<GestureControls> {
     if (action == null && (dx.abs() > 8 || dy.abs() > 8)) {
       if (dx.abs() > dy.abs()) {
         action = 'seek';
+      } else if (startX < constraints.maxWidth / 2) {
+        action = 'brightness';
+        readingBrightness = true;
+        _readBrightness();
       } else {
-        action = startX < constraints.maxWidth / 2
-            ? 'brightness'
-            : 'volume';
-
-        if (action == 'brightness') {
-          readingBrightness = true;
-          _readBrightness();
-        }
+        action = 'volume';
       }
-
-      if (mounted) setState(() {});
     }
 
+    if (action == null) return;
+
     if (action == 'seek') {
+      final totalMilliseconds = widget.duration.inMilliseconds;
+
+      if (totalMilliseconds <= 0) return;
+
       final seconds = dx / constraints.maxWidth * 120;
 
       final target = startPosition +
           Duration(milliseconds: (seconds * 1000).round());
 
-      final maxDuration = widget.duration.inMilliseconds;
-
       final safeMilliseconds = target.inMilliseconds.clamp(
         0,
-        maxDuration > 0 ? maxDuration : 0,
+        totalMilliseconds,
       );
 
-      previewPosition = Duration(
-        milliseconds: safeMilliseconds,
-      );
-
-      value = seconds;
+      previewPosition = Duration(milliseconds: safeMilliseconds);
+      previewValue = seconds;
     } else if (action == 'volume') {
       final next = (startVolume -
               dy / constraints.maxHeight * 100)
           .clamp(0.0, 100.0)
           .toDouble();
 
-      value = next;
+      previewValue = next;
       widget.onVolume(next);
     } else if (action == 'brightness') {
       if (!brightnessReady) {
@@ -118,12 +117,8 @@ class _GestureControlsState extends State<GestureControls> {
           .clamp(0.0, 1.0)
           .toDouble();
 
-      value = next * 100;
-
-      try {
-        await ScreenBrightness.instance
-            .setApplicationScreenBrightness(next);
-      } catch (_) {}
+      previewValue = next * 100;
+      _setBrightness(next);
     }
 
     if (mounted) setState(() {});
@@ -138,59 +133,97 @@ class _GestureControlsState extends State<GestureControls> {
 
       startBrightness = brightness.clamp(0.0, 1.0).toDouble();
       brightnessReady = true;
+      readingBrightness = false;
 
       setState(() {});
     } catch (_) {
       if (!mounted) return;
 
+      brightnessFailed = true;
       brightnessReady = false;
-      setState(() {});
-    } finally {
       readingBrightness = false;
+
+      setState(() {});
+    }
+  }
+
+  Future<void> _setBrightness(double brightness) async {
+    try {
+      await ScreenBrightness.instance
+          .setApplicationScreenBrightness(brightness);
+    } catch (_) {
+      if (!mounted) return;
+
+      brightnessFailed = true;
+      setState(() {});
     }
   }
 
   void endGesture(DragEndDetails details) {
-    if (action == 'seek') {
+    if (action == 'seek' &&
+        widget.duration > Duration.zero) {
       widget.onSeek(previewPosition);
     }
 
-    if (mounted) {
-      setState(() {
-        action = null;
-      });
-    }
+    if (!mounted) return;
+
+    setState(() {
+      action = null;
+      readingBrightness = false;
+    });
   }
 
   void cancelGesture() {
-    if (mounted) {
-      setState(() {
-        action = null;
-      });
+    if (!mounted) return;
+
+    setState(() {
+      action = null;
+      readingBrightness = false;
+    });
+  }
+
+  String formatTime(Duration duration) {
+    final safe = duration.isNegative ? Duration.zero : duration;
+
+    String two(int number) =>
+        number.toString().padLeft(2, '0');
+
+    if (safe.inHours > 0) {
+      return '${two(safe.inHours)}:'
+          '${two(safe.inMinutes.remainder(60))}:'
+          '${two(safe.inSeconds.remainder(60))}';
     }
+
+    return '${two(safe.inMinutes)}:'
+        '${two(safe.inSeconds.remainder(60))}';
   }
 
   String get actionText {
     if (action == 'seek') {
-      final seconds = value.abs().toStringAsFixed(1);
-      return value >= 0
+      final seconds = previewValue.abs().toStringAsFixed(1);
+
+      return previewValue >= 0
           ? '+$seconds ثانية'
           : '-$seconds ثانية';
     }
 
     if (action == 'volume') {
-      return 'الصوت ${value.toStringAsFixed(0)}%';
+      return 'الصوت ${previewValue.toStringAsFixed(0)}%';
     }
 
     if (readingBrightness) {
       return 'جارٍ قراءة السطوع...';
     }
 
-    if (!brightnessReady) {
-      return 'تعذر قراءة السطوع';
+    if (brightnessFailed) {
+      return 'تعذر التحكم بالسطوع';
     }
 
-    return 'السطوع ${value.toStringAsFixed(0)}%';
+    if (!brightnessReady) {
+      return 'جارٍ تجهيز السطوع...';
+    }
+
+    return 'السطوع ${previewValue.toStringAsFixed(0)}%';
   }
 
   IconData get actionIcon {
@@ -225,7 +258,7 @@ class _GestureControlsState extends State<GestureControls> {
                         vertical: 18,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.82),
+                        color: Colors.black.withValues(alpha: 0.84),
                         borderRadius: BorderRadius.circular(18),
                         border: Border.all(
                           color: const Color(0xFFE0A0AA)
@@ -269,21 +302,5 @@ class _GestureControlsState extends State<GestureControls> {
         );
       },
     );
-  }
-
-  String formatTime(Duration duration) {
-    final safe = duration.isNegative ? Duration.zero : duration;
-
-    String two(int number) =>
-        number.toString().padLeft(2, '0');
-
-    if (safe.inHours > 0) {
-      return '${two(safe.inHours)}:'
-          '${two(safe.inMinutes.remainder(60))}:'
-          '${two(safe.inSeconds.remainder(60))}';
-    }
-
-    return '${two(safe.inMinutes)}:'
-        '${two(safe.inSeconds.remainder(60))}';
   }
 }
