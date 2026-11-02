@@ -31,7 +31,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   bool repeat = false;
   bool fullscreen = false;
   bool opening = false;
+
   double volume = 100;
+  double speed = 1.0;
 
   @override
   void initState() {
@@ -54,6 +56,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
     try {
       await engine.open(path);
+      await engine.setVolume(volume);
+      await engine.setSpeed(speed);
       await WakelockPlus.enable();
     } catch (e) {
       if (!mounted) return;
@@ -84,6 +88,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       });
 
       await engine.open(path);
+      await engine.setVolume(volume);
+      await engine.setSpeed(speed);
       await WakelockPlus.enable();
     } catch (e) {
       if (!mounted) return;
@@ -107,6 +113,22 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     }
 
     await showSubtitleAudioPanel(context, engine.player);
+  }
+
+  Future<void> changeSpeed(double value) async {
+    try {
+      await engine.setSpeed(value);
+
+      if (mounted) {
+        setState(() => speed = value);
+      }
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر تغيير السرعة: $e')),
+      );
+    }
   }
 
   Future<void> changeMode() async {
@@ -134,13 +156,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
       await engine.open(path);
       await engine.seek(oldPosition);
+      await engine.setVolume(volume);
+      await engine.setSpeed(speed);
+      await engine.setRepeat(repeat);
 
       if (wasPlaying) {
         await engine.player.play();
       }
-
-      await engine.setVolume(volume);
-      await engine.setRepeat(repeat);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -148,7 +170,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         );
       }
     } finally {
-      if (mounted) setState(() => opening = false);
+      if (mounted) {
+        setState(() => opening = false);
+      }
     }
   }
 
@@ -352,6 +376,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                                 durationSnapshot.data ?? Duration.zero,
                             playing: playing,
                             repeat: repeat,
+                            speed: speed,
+                            onSpeed: changeSpeed,
                             onPlayPause: () => engine.playPause(),
                             onRepeat: toggleRepeat,
                             onRotate: rotate,
