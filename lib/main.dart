@@ -1,7 +1,8 @@
 
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
-import 'video_player_screen.dart';
+
+import 'library_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,7 +28,7 @@ class BurhanPlyerApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const VideoPlayerScreen(),
+      home: const LibraryScreen(),
     );
   }
 }
