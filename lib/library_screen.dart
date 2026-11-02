@@ -20,6 +20,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   bool loading = true;
   bool loadingMore = false;
   bool hasMore = false;
+  bool openingVideo = false;
 
   String? error;
 
@@ -32,6 +33,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
   int totalVideos = 0;
   int currentPage = 0;
 
+  int _folderRequestId = 0;
+  int _moreRequestId = 0;
+
   @override
   void initState() {
     super.initState();
@@ -39,21 +43,27 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<void> loadFolders() async {
+    final requestId = ++_folderRequestId;
+
     if (!mounted) return;
 
     setState(() {
       loading = true;
+      loadingMore = false;
       error = null;
       selectedFolder = null;
       videos = [];
+      hasMore = false;
+      totalVideos = 0;
+      currentPage = 0;
     });
 
     try {
       final permission = await PhotoManager.requestPermissionExtend();
 
-      if (!permission.hasAccess) {
-        if (!mounted) return;
+      if (!mounted || requestId != _folderRequestId) return;
 
+      if (!permission.hasAccess) {
         setState(() {
           loading = false;
           error = 'نحتاج إلى إذن الوصول إلى فيديوهات الهاتف.';
@@ -70,6 +80,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
       final counts = <String, int>{};
 
       for (final path in paths) {
+        if (!mounted || requestId != _folderRequestId) return;
+
         final count = await path.assetCountAsync;
 
         if (count > 0) {
@@ -78,17 +90,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
         }
       }
 
-      if (!mounted) return;
+      if (!mounted || requestId != _folderRequestId) return;
 
       setState(() {
         folders = validFolders;
+
         folderCounts
           ..clear()
           ..addAll(counts);
+
         loading = false;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || requestId != _folderRequestId) return;
 
       setState(() {
         loading = false;
@@ -98,6 +112,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<void> openFolder(AssetPathEntity folder) async {
+    final requestId = ++_folderRequestId;
+
     if (!mounted) return;
 
     setState(() {
@@ -117,16 +133,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
         size: pageSize,
       );
 
-      if (!mounted) return;
+      if (!mounted || requestId != _folderRequestId) return;
 
       setState(() {
         videos = result;
         currentPage = 0;
-        hasMore = videos.length < totalVideos;
+        hasMore = result.length < totalVideos && result.isNotEmpty;
         loading = false;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || requestId != _folderRequestId) return;
 
       setState(() {
         loading = false;
@@ -142,28 +158,38 @@ class _LibraryScreenState extends State<LibraryScreen> {
       return;
     }
 
+    final requestId = ++_moreRequestId;
+    final folderId = folder.id;
+    final nextPage = currentPage + 1;
+
     setState(() {
       loadingMore = true;
     });
 
     try {
-      final nextPage = currentPage + 1;
-
       final result = await folder.getAssetListPaged(
         page: nextPage,
         size: pageSize,
       );
 
-      if (!mounted) return;
+      if (!mounted ||
+          requestId != _moreRequestId ||
+          selectedFolder?.id != folderId) {
+        return;
+      }
 
       setState(() {
         videos.addAll(result);
         currentPage = nextPage;
-        hasMore = videos.length < totalVideos && result.isNotEmpty;
+        hasMore = result.isNotEmpty && videos.length < totalVideos;
         loadingMore = false;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted ||
+          requestId != _moreRequestId ||
+          selectedFolder?.id != folderId) {
+        return;
+      }
 
       setState(() {
         loadingMore = false;
@@ -178,16 +204,21 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<void> refreshCurrent() async {
-    final folder = selectedFolder;
-
-    if (folder == null) {
+    if (selectedFolder == null) {
       await loadFolders();
     } else {
+      final folder = selectedFolder!;
       await openFolder(folder);
     }
   }
 
   Future<void> playVideo(AssetEntity video) async {
+    if (openingVideo) return;
+
+    setState(() {
+      openingVideo = true;
+    });
+
     try {
       final File? file = await video.file;
 
@@ -220,6 +251,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
           content: Text('تعذر فتح الفيديو: $e'),
         ),
       );
+    } finally {
+      if (mounted) {
+        setState(() {
+          openingVideo = false;
+        });
+      }
     }
   }
 
@@ -244,7 +281,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       color: const Color(0xFF1B1D22),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: () => openFolder(folder),
+        onTap: loading ? null : () => openFolder(folder),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(
@@ -301,7 +338,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   Widget buildVideoCard(AssetEntity video) {
     return InkWell(
-      onTap: () => playVideo(video),
+      onTap: openingVideo ? null : () => playVideo(video),
       borderRadius: BorderRadius.circular(12),
       child: Container(
         decoration: BoxDecoration(
@@ -326,17 +363,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           snapshot.data!,
                           fit: BoxFit.cover,
                           width: double.infinity,
+                          errorBuilder: (_, __, ___) {
+                            return _thumbnailPlaceholder();
+                          },
                         );
                       }
 
-                      return Container(
-                        color: const Color(0xFF292B31),
-                        child: const Icon(
-                          Icons.video_file,
-                          color: Colors.white38,
-                          size: 42,
-                        ),
-                      );
+                      return _thumbnailPlaceholder();
                     },
                   ),
                   Positioned(
@@ -389,6 +422,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
+  Widget _thumbnailPlaceholder() {
+    return Container(
+      color: const Color(0xFF292B31),
+      child: const Center(
+        child: Icon(
+          Icons.video_file,
+          color: Colors.white38,
+          size: 42,
+        ),
+      ),
+    );
+  }
+
   Widget buildPermissionError() {
     return Center(
       child: Padding(
@@ -403,7 +449,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              error!,
+              error ?? 'حدث خطأ غير معروف.',
               textAlign: TextAlign.center,
               style: const TextStyle(color: Colors.white70),
             ),
@@ -411,7 +457,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             ElevatedButton.icon(
               onPressed: () async {
                 await PhotoManager.openSetting();
-                await loadFolders();
+                if (mounted) await loadFolders();
               },
               icon: const Icon(Icons.settings),
               label: const Text('فتح إعدادات الأذونات'),
@@ -441,10 +487,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
     if (selectedFolder == null) {
       if (folders.isEmpty) {
-        return const Center(
-          child: Text(
-            'لم يتم العثور على مجلدات تحتوي على فيديوهات.',
-            style: TextStyle(color: Colors.white70),
+        return RefreshIndicator(
+          onRefresh: loadFolders,
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            children: const [
+              SizedBox(height: 180),
+              Center(
+                child: Text(
+                  'لم يتم العثور على مجلدات تحتوي على فيديوهات.',
+                  style: TextStyle(color: Colors.white70),
+                ),
+              ),
+            ],
           ),
         );
       }
@@ -463,60 +518,73 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
 
     if (videos.isEmpty) {
-      return const Center(
-        child: Text(
-          'لا توجد فيديوهات في هذا المجلد.',
-          style: TextStyle(color: Colors.white70),
+      return RefreshIndicator(
+        onRefresh: refreshCurrent,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: const [
+            SizedBox(height: 180),
+            Center(
+              child: Text(
+                'لا توجد فيديوهات في هذا المجلد.',
+                style: TextStyle(color: Colors.white70),
+              ),
+            ),
+          ],
         ),
       );
     }
 
-    return GridView.builder(
-      padding: const EdgeInsets.all(12),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 12,
-        childAspectRatio: 1.18,
-      ),
-      itemCount: videos.length + (hasMore ? 1 : 0),
-      itemBuilder: (context, index) {
-        if (index < videos.length) {
-          return buildVideoCard(videos[index]);
-        }
+    return RefreshIndicator(
+      onRefresh: refreshCurrent,
+      child: GridView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(12),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 12,
+          childAspectRatio: 1.18,
+        ),
+        itemCount: videos.length + (hasMore ? 1 : 0),
+        itemBuilder: (context, index) {
+          if (index < videos.length) {
+            return buildVideoCard(videos[index]);
+          }
 
-        return InkWell(
-          onTap: loadMoreVideos,
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFF1B1D22),
-              borderRadius: BorderRadius.circular(12),
+          return InkWell(
+            onTap: loadingMore ? null : loadMoreVideos,
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF1B1D22),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Center(
+                child: loadingMore
+                    ? const CircularProgressIndicator(
+                        color: Color(0xFFE0A0AA),
+                      )
+                    : const Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.expand_more,
+                            color: Color(0xFFE0A0AA),
+                            size: 35,
+                          ),
+                          SizedBox(height: 5),
+                          Text(
+                            'تحميل المزيد',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ],
+                      ),
+              ),
             ),
-            child: Center(
-              child: loadingMore
-                  ? const CircularProgressIndicator(
-                      color: Color(0xFFE0A0AA),
-                    )
-                  : const Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.expand_more,
-                          color: Color(0xFFE0A0AA),
-                          size: 35,
-                        ),
-                        SizedBox(height: 5),
-                        Text(
-                          'تحميل المزيد',
-                          style: TextStyle(color: Colors.white70),
-                        ),
-                      ],
-                    ),
-            ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
@@ -541,11 +609,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
             : IconButton(
                 icon: const Icon(Icons.arrow_back),
                 onPressed: () {
+                  ++_folderRequestId;
+                  ++_moreRequestId;
+
                   setState(() {
                     selectedFolder = null;
                     videos = [];
                     error = null;
                     loading = false;
+                    loadingMore = false;
+                    hasMore = false;
                   });
                 },
               ),
@@ -557,7 +630,22 @@ class _LibraryScreenState extends State<LibraryScreen> {
           ),
         ],
       ),
-      body: buildBody(),
+      body: Stack(
+        children: [
+          buildBody(),
+          if (openingVideo)
+            const Positioned.fill(
+              child: ColoredBox(
+                color: Color(0x55000000),
+                child: Center(
+                  child: CircularProgressIndicator(
+                    color: Color(0xFFE0A0AA),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
