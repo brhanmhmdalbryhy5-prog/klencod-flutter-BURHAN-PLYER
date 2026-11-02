@@ -11,199 +11,292 @@ Future<void> showSubtitleAudioPanel(
 ) async {
   final manager = SubtitleManager(player);
 
-  await showModalBottomSheet(
+  await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     backgroundColor: const Color(0xFF1B1D22),
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(
+        top: Radius.circular(22),
+      ),
+    ),
     builder: (sheetContext) {
-      return SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(18),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Center(
-                  child: Text(
-                    'إعدادات الترجمة والصوت',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 19,
-                      fontWeight: FontWeight.bold,
+      return StatefulBuilder(
+        builder: (context, setSheetState) {
+          bool busy = false;
+          String? message;
+
+          Future<void> runAction(
+            Future<void> Function() action, {
+            String? successMessage,
+          }) async {
+            if (busy) return;
+
+            setSheetState(() {
+              busy = true;
+              message = null;
+            });
+
+            try {
+              await action();
+
+              if (!sheetContext.mounted) return;
+
+              setSheetState(() {
+                message = successMessage ?? 'تم تنفيذ العملية بنجاح.';
+              });
+            } catch (error) {
+              if (!sheetContext.mounted) return;
+
+              setSheetState(() {
+                message = 'تعذر تنفيذ العملية: $error';
+              });
+            } finally {
+              if (sheetContext.mounted) {
+                setSheetState(() {
+                  busy = false;
+                });
+              }
+            }
+          }
+
+          Future<void> pickSubtitle() async {
+            final result = await FilePicker.platform.pickFiles(
+              type: FileType.custom,
+              allowedExtensions: ['srt', 'ass', 'ssa', 'vtt'],
+            );
+
+            if (result == null || result.files.isEmpty) return;
+
+            final path = result.files.single.path;
+
+            if (path == null || path.trim().isEmpty) {
+              if (!sheetContext.mounted) return;
+              setSheetState(() {
+                message = 'تعذر الوصول إلى ملف الترجمة.';
+              });
+              return;
+            }
+
+            await runAction(
+              () => manager.load(path),
+              successMessage: 'تم تحميل ملف الترجمة.',
+            );
+          }
+
+          Future<void> pickAudio() async {
+            final result = await FilePicker.platform.pickFiles(
+              type: FileType.audio,
+            );
+
+            if (result == null || result.files.isEmpty) return;
+
+            final path = result.files.single.path;
+
+            if (path == null || path.trim().isEmpty) {
+              if (!sheetContext.mounted) return;
+              setSheetState(() {
+                message = 'تعذر الوصول إلى ملف الصوت.';
+              });
+              return;
+            }
+
+            await runAction(
+              () => manager.loadAudio(path),
+              successMessage: 'تم تحميل ملف الصوت الخارجي.',
+            );
+          }
+
+          final subtitleTracks = manager.availableSubtitles;
+          final audioTracks = manager.availableAudioTracks;
+
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 42,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.white30,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 20),
 
-                const Text(
-                  'الترجمة',
-                  style: TextStyle(
-                    color: Color(0xFFE0A0AA),
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+                    const SizedBox(height: 18),
 
-                ListTile(
-                  leading: const Icon(Icons.add_circle_outline,
-                      color: Colors.white),
-                  title: const Text('تحميل ترجمة خارجية',
-                      style: TextStyle(color: Colors.white)),
-                  onTap: () async {
-                    final result = await FilePicker.platform.pickFiles(
-                      type: FileType.custom,
-                      allowedExtensions: ['srt', 'ass', 'ssa', 'vtt'],
-                    );
+                    const Text(
+                      'الترجمة والصوت',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
 
-                    if (result == null ||
-                        result.files.single.path == null) return;
+                    const SizedBox(height: 20),
 
-                    try {
-                      await manager.load(result.files.single.path!);
-                      if (sheetContext.mounted) {
-                        Navigator.pop(sheetContext);
-                      }
-                    } catch (e) {
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('تعذر تحميل الترجمة: $e')),
+                    const Text(
+                      'إعدادات الترجمة',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFFE3A1AA),
+                      ),
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    ListTile(
+                      leading: const Icon(Icons.auto_awesome),
+                      title: const Text('الترجمة التلقائية'),
+                      enabled: !busy,
+                      onTap: () => runAction(
+                        manager.automatic,
+                        successMessage: 'تم تفعيل الترجمة التلقائية.',
+                      ),
+                    ),
+
+                    ListTile(
+                      leading: const Icon(Icons.subtitles_off),
+                      title: const Text('إيقاف الترجمة'),
+                      enabled: !busy,
+                      onTap: () => runAction(
+                        manager.disable,
+                        successMessage: 'تم إيقاف الترجمة.',
+                      ),
+                    ),
+
+                    ListTile(
+                      leading: const Icon(Icons.add_circle_outline),
+                      title: const Text('تحميل ترجمة خارجية'),
+                      enabled: !busy,
+                      onTap: pickSubtitle,
+                    ),
+
+                    const Divider(color: Colors.white12),
+
+                    const Text(
+                      'الترجمات المدمجة',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+
+                    if (subtitleTracks.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: Text(
+                          'لا توجد مسارات ترجمة مدمجة.',
+                          style: TextStyle(color: Colors.white54),
+                        ),
+                      )
+                    else
+                      ...List.generate(subtitleTracks.length, (index) {
+                        return ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.closed_caption),
+                          title: Text('مسار الترجمة ${index + 1}'),
+                          enabled: !busy,
+                          onTap: () => runAction(
+                            () => manager.selectEmbedded(index),
+                            successMessage:
+                                'تم اختيار مسار الترجمة ${index + 1}.',
+                          ),
                         );
-                      }
-                    }
-                  },
-                ),
+                      }),
 
-                ListTile(
-                  leading: const Icon(Icons.subtitles,
-                      color: Colors.white),
-                  title: const Text('الترجمة التلقائية',
-                      style: TextStyle(color: Colors.white)),
-                  onTap: () async {
-                    await manager.automatic();
-                    if (sheetContext.mounted) {
-                      Navigator.pop(sheetContext);
-                    }
-                  },
-                ),
+                    const Divider(color: Colors.white12),
 
-                ListTile(
-                  leading: const Icon(Icons.subtitles_off,
-                      color: Colors.white),
-                  title: const Text('إيقاف الترجمة',
-                      style: TextStyle(color: Colors.white)),
-                  onTap: () async {
-                    await manager.disable();
-                    if (sheetContext.mounted) {
-                      Navigator.pop(sheetContext);
-                    }
-                  },
-                ),
-
-                const Divider(color: Colors.white24),
-
-                const Text(
-                  'مسارات الترجمة المدمجة',
-                  style: TextStyle(
-                    color: Color(0xFFE0A0AA),
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-
-                if (manager.availableSubtitles.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: Text(
-                      'لا توجد ترجمات مدمجة.',
-                      style: TextStyle(color: Colors.white54),
+                    const Text(
+                      'إعدادات الصوت',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFFE3A1AA),
+                      ),
                     ),
-                  ),
 
-                ...List.generate(
-                  manager.availableSubtitles.length,
-                  (index) => ListTile(
-                    leading: const Icon(Icons.closed_caption,
-                        color: Colors.white),
-                    title: Text(
-                      'مسار الترجمة ${index + 1}',
-                      style: const TextStyle(color: Colors.white),
+                    const SizedBox(height: 8),
+
+                    ListTile(
+                      leading: const Icon(Icons.audio_file),
+                      title: const Text('تحميل ملف صوت خارجي'),
+                      enabled: !busy,
+                      onTap: pickAudio,
                     ),
-                    onTap: () async {
-                      await manager.selectEmbedded(index);
-                      if (sheetContext.mounted) {
-                        Navigator.pop(sheetContext);
-                      }
-                    },
-                  ),
-                ),
 
-                const Divider(color: Colors.white24),
+                    const Divider(color: Colors.white12),
 
-                const Text(
-                  'الصوت',
-                  style: TextStyle(
-                    color: Color(0xFFE0A0AA),
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+                    const Text(
+                      'المسارات الصوتية المدمجة',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
 
-                ListTile(
-                  leading: const Icon(Icons.audio_file,
-                      color: Colors.white),
-                  title: const Text('تحميل ملف صوت خارجي',
-                      style: TextStyle(color: Colors.white)),
-                  onTap: () async {
-                    final result = await FilePicker.platform.pickFiles(
-                      type: FileType.audio,
-                    );
-
-                    if (result == null ||
-                        result.files.single.path == null) return;
-
-                    try {
-                      await manager.loadAudio(result.files.single.path!);
-                      if (sheetContext.mounted) {
-                        Navigator.pop(sheetContext);
-                      }
-                    } catch (e) {
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('تعذر تحميل الصوت: $e')),
+                    if (audioTracks.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: Text(
+                          'لا توجد مسارات صوتية مدمجة.',
+                          style: TextStyle(color: Colors.white54),
+                        ),
+                      )
+                    else
+                      ...List.generate(audioTracks.length, (index) {
+                        return ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.music_note),
+                          title: Text('المسار الصوتي ${index + 1}'),
+                          enabled: !busy,
+                          onTap: () => runAction(
+                            () => manager.selectAudio(index),
+                            successMessage:
+                                'تم اختيار المسار الصوتي ${index + 1}.',
+                          ),
                         );
-                      }
-                    }
-                  },
-                ),
+                      }),
 
-                if (manager.availableAudioTracks.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: Text(
-                      'لا توجد مسارات صوت إضافية.',
-                      style: TextStyle(color: Colors.white54),
-                    ),
-                  ),
+                    if (busy) ...[
+                      const SizedBox(height: 12),
+                      const LinearProgressIndicator(),
+                    ],
 
-                ...List.generate(
-                  manager.availableAudioTracks.length,
-                  (index) => ListTile(
-                    leading: const Icon(Icons.volume_up,
-                        color: Colors.white),
-                    title: Text(
-                      'مسار الصوت ${index + 1}',
-                      style: const TextStyle(color: Colors.white),
+                    if (message != null) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        message!,
+                        style: TextStyle(
+                          color: message!.startsWith('تعذر')
+                              ? Colors.redAccent
+                              : Colors.greenAccent,
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 12),
+
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        onPressed: busy
+                            ? null
+                            : () => Navigator.pop(sheetContext),
+                        child: const Text('إغلاق'),
+                      ),
                     ),
-                    onTap: () async {
-                      await manager.selectAudio(index);
-                      if (sheetContext.mounted) {
-                        Navigator.pop(sheetContext);
-                      }
-                    },
-                  ),
+                  ],
                 ),
-              ],
+              ),
             ),
-          ),
-        ),
+          );
+        },
       );
     },
   );
