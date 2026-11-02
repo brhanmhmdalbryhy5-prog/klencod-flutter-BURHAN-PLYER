@@ -1,7 +1,7 @@
 
 import 'package:flutter/material.dart';
 
-class VideoControls extends StatelessWidget {
+class VideoControls extends StatefulWidget {
   final Duration position;
   final Duration duration;
   final bool playing;
@@ -35,10 +35,17 @@ class VideoControls extends StatelessWidget {
     required this.speed,
   });
 
-  String formatTime(Duration d) {
-    final safe = d.isNegative ? Duration.zero : d;
+  @override
+  State<VideoControls> createState() => _VideoControlsState();
+}
 
-    String two(int n) => n.toString().padLeft(2, '0');
+class _VideoControlsState extends State<VideoControls> {
+  double? draggingValue;
+
+  String formatTime(Duration duration) {
+    final safe = duration.isNegative ? Duration.zero : duration;
+
+    String two(int value) => value.toString().padLeft(2, '0');
 
     if (safe.inHours > 0) {
       return '${two(safe.inHours)}:'
@@ -50,28 +57,35 @@ class VideoControls extends StatelessWidget {
         '${two(safe.inSeconds.remainder(60))}';
   }
 
-  void skip(int seconds) {
-    if (duration <= Duration.zero) return;
+  void seekBy(int seconds) {
+    if (widget.duration <= Duration.zero) return;
 
-    final target = position + Duration(seconds: seconds);
+    final target = widget.position + Duration(seconds: seconds);
 
     final safe = Duration(
-      milliseconds: target.inMilliseconds
-          .clamp(0, duration.inMilliseconds),
+      milliseconds: target.inMilliseconds.clamp(
+        0,
+        widget.duration.inMilliseconds,
+      ),
     );
 
-    onSeek(safe);
+    widget.onSeek(safe);
   }
 
   @override
   Widget build(BuildContext context) {
-    final total = duration.inMilliseconds.toDouble();
-    final current = position.inMilliseconds.toDouble();
+    final total = widget.duration.inMilliseconds.toDouble();
     final hasVideo = total > 0;
 
-    final sliderValue = hasVideo
-        ? current.clamp(0.0, total).toDouble()
-        : 0.0;
+    final actualPosition =
+        widget.position.inMilliseconds.toDouble();
+
+    final sliderValue = draggingValue ??
+        (hasVideo ? actualPosition.clamp(0.0, total).toDouble() : 0.0);
+
+    final previewPosition = hasVideo
+        ? Duration(milliseconds: sliderValue.round())
+        : Duration.zero;
 
     return Container(
       width: double.infinity,
@@ -93,9 +107,20 @@ class VideoControls extends StatelessWidget {
               max: hasVideo ? total : 1,
               onChanged: hasVideo
                   ? (value) {
-                      onSeek(
+                      setState(() {
+                        draggingValue = value;
+                      });
+                    }
+                  : null,
+              onChangeEnd: hasVideo
+                  ? (value) {
+                      widget.onSeek(
                         Duration(milliseconds: value.round()),
                       );
+
+                      setState(() {
+                        draggingValue = null;
+                      });
                     }
                   : null,
             ),
@@ -105,14 +130,18 @@ class VideoControls extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                formatTime(position),
+                formatTime(
+                  draggingValue == null
+                      ? widget.position
+                      : previewPosition,
+                ),
                 style: const TextStyle(
                   color: Colors.white70,
                   fontSize: 12,
                 ),
               ),
               Text(
-                formatTime(duration),
+                formatTime(widget.duration),
                 style: const TextStyle(
                   color: Colors.white70,
                   fontSize: 12,
@@ -127,26 +156,26 @@ class VideoControls extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               IconButton(
-                onPressed: hasVideo ? () => skip(-10) : null,
+                onPressed: hasVideo ? () => seekBy(-10) : null,
                 icon: const Icon(Icons.replay_10),
                 color: Colors.white,
                 tooltip: 'تراجع 10 ثوانٍ',
               ),
 
               IconButton(
-                onPressed: hasVideo ? onPlayPause : null,
+                onPressed: hasVideo ? widget.onPlayPause : null,
                 iconSize: 48,
                 icon: Icon(
-                  playing
+                  widget.playing
                       ? Icons.pause_circle_filled
                       : Icons.play_circle_fill,
                   color: const Color(0xFFE0A0AA),
                 ),
-                tooltip: playing ? 'إيقاف مؤقت' : 'تشغيل',
+                tooltip: widget.playing ? 'إيقاف مؤقت' : 'تشغيل',
               ),
 
               IconButton(
-                onPressed: hasVideo ? () => skip(10) : null,
+                onPressed: hasVideo ? () => seekBy(10) : null,
                 icon: const Icon(Icons.forward_10),
                 color: Colors.white,
                 tooltip: 'تقديم 10 ثوانٍ',
@@ -160,50 +189,50 @@ class VideoControls extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               IconButton(
-                onPressed: onOpenFile,
+                onPressed: widget.onOpenFile,
                 icon: const Icon(Icons.folder_open),
                 color: Colors.white70,
                 tooltip: 'فتح فيديو',
               ),
 
               IconButton(
-                onPressed: hasVideo ? onRotate : null,
+                onPressed: hasVideo ? widget.onRotate : null,
                 icon: const Icon(Icons.screen_rotation),
                 color: Colors.white70,
                 tooltip: 'ملء الشاشة',
               ),
 
               IconButton(
-                onPressed: hasVideo ? onRepeat : null,
+                onPressed: hasVideo ? widget.onRepeat : null,
                 icon: Icon(
                   Icons.repeat,
-                  color: repeat
+                  color: widget.repeat
                       ? const Color(0xFFE05268)
                       : Colors.white70,
                 ),
-                tooltip: repeat ? 'إيقاف التكرار' : 'تكرار الفيديو',
+                tooltip: widget.repeat ? 'إيقاف التكرار' : 'تكرار الفيديو',
               ),
 
               IconButton(
-                onPressed: hasVideo ? onSubtitle : null,
+                onPressed: hasVideo ? widget.onSubtitle : null,
                 icon: const Icon(Icons.subtitles),
                 color: Colors.white70,
                 tooltip: 'الترجمة والصوت',
               ),
 
               IconButton(
-                onPressed: hasVideo ? onMode : null,
+                onPressed: hasVideo ? widget.onMode : null,
                 icon: const Icon(Icons.memory),
                 color: Colors.white70,
                 tooltip: 'وضع الترميز',
               ),
 
               PopupMenuButton<double>(
-                initialValue: speed,
+                initialValue: widget.speed,
                 tooltip: 'سرعة التشغيل',
                 enabled: hasVideo,
                 color: const Color(0xFF292B31),
-                onSelected: onSpeed,
+                onSelected: widget.onSpeed,
                 itemBuilder: (context) => [
                   0.25,
                   0.5,
@@ -220,16 +249,14 @@ class VideoControls extends StatelessWidget {
                     value: value,
                     child: Text(
                       '${value}x',
-                      style: const TextStyle(
-                        color: Colors.white,
-                      ),
+                      style: const TextStyle(color: Colors.white),
                     ),
                   );
                 }).toList(),
                 child: Padding(
                   padding: const EdgeInsets.all(8),
                   child: Text(
-                    '${speed}x',
+                    '${widget.speed}x',
                     style: const TextStyle(
                       color: Color(0xFFE0A0AA),
                       fontWeight: FontWeight.bold,
