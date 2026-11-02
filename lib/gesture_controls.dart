@@ -37,29 +37,30 @@ class _GestureControlsState extends State<GestureControls> {
   Duration previewPosition = Duration.zero;
 
   bool brightnessReady = false;
+  bool readingBrightness = false;
 
   Future<void> startGesture(DragStartDetails details) async {
     startX = details.localPosition.dx;
     startY = details.localPosition.dy;
+
     startPosition = widget.position;
     previewPosition = widget.position;
     startVolume = widget.volume;
+
     action = null;
     brightnessReady = false;
-
-    try {
-      startBrightness =
-          await ScreenBrightness.instance.application;
-      brightnessReady = true;
-    } catch (_) {
-      startBrightness = 0.5;
-    }
+    readingBrightness = false;
+    value = 0;
   }
 
   Future<void> updateGesture(
     DragUpdateDetails details,
     BoxConstraints constraints,
   ) async {
+    if (constraints.maxWidth <= 0 || constraints.maxHeight <= 0) {
+      return;
+    }
+
     final dx = details.localPosition.dx - startX;
     final dy = details.localPosition.dy - startY;
 
@@ -70,49 +71,83 @@ class _GestureControlsState extends State<GestureControls> {
         action = startX < constraints.maxWidth / 2
             ? 'brightness'
             : 'volume';
+
+        if (action == 'brightness') {
+          readingBrightness = true;
+          _readBrightness();
+        }
       }
+
+      if (mounted) setState(() {});
     }
 
     if (action == 'seek') {
-      final seconds =
-          dx / constraints.maxWidth * 120;
+      final seconds = dx / constraints.maxWidth * 120;
 
       final target = startPosition +
           Duration(milliseconds: (seconds * 1000).round());
 
       final maxDuration = widget.duration.inMilliseconds;
 
-      final safeMilliseconds = target.inMilliseconds
-          .clamp(0, maxDuration > 0 ? maxDuration : 0);
+      final safeMilliseconds = target.inMilliseconds.clamp(
+        0,
+        maxDuration > 0 ? maxDuration : 0,
+      );
 
-      previewPosition =
-          Duration(milliseconds: safeMilliseconds);
+      previewPosition = Duration(
+        milliseconds: safeMilliseconds,
+      );
 
       value = seconds;
     } else if (action == 'volume') {
-      final next =
-          (startVolume - dy / constraints.maxHeight * 100)
-              .clamp(0.0, 100.0)
-              .toDouble();
+      final next = (startVolume -
+              dy / constraints.maxHeight * 100)
+          .clamp(0.0, 100.0)
+          .toDouble();
 
-      widget.onVolume(next);
       value = next;
+      widget.onVolume(next);
     } else if (action == 'brightness') {
-      if (!brightnessReady) return;
+      if (!brightnessReady) {
+        if (mounted) setState(() {});
+        return;
+      }
 
-      final next =
-          (startBrightness - dy / constraints.maxHeight)
-              .clamp(0.0, 1.0)
-              .toDouble();
+      final next = (startBrightness -
+              dy / constraints.maxHeight)
+          .clamp(0.0, 1.0)
+          .toDouble();
+
+      value = next * 100;
 
       try {
         await ScreenBrightness.instance
             .setApplicationScreenBrightness(next);
-        value = next * 100;
       } catch (_) {}
     }
 
     if (mounted) setState(() {});
+  }
+
+  Future<void> _readBrightness() async {
+    try {
+      final brightness =
+          await ScreenBrightness.instance.application;
+
+      if (!mounted || action != 'brightness') return;
+
+      startBrightness = brightness.clamp(0.0, 1.0).toDouble();
+      brightnessReady = true;
+
+      setState(() {});
+    } catch (_) {
+      if (!mounted) return;
+
+      brightnessReady = false;
+      setState(() {});
+    } finally {
+      readingBrightness = false;
+    }
   }
 
   void endGesture(DragEndDetails details) {
@@ -127,14 +162,32 @@ class _GestureControlsState extends State<GestureControls> {
     }
   }
 
+  void cancelGesture() {
+    if (mounted) {
+      setState(() {
+        action = null;
+      });
+    }
+  }
+
   String get actionText {
     if (action == 'seek') {
       final seconds = value.abs().toStringAsFixed(1);
-      return value >= 0 ? '+$seconds ثانية' : '-$seconds ثانية';
+      return value >= 0
+          ? '+$seconds ثانية'
+          : '-$seconds ثانية';
     }
 
     if (action == 'volume') {
       return 'الصوت ${value.toStringAsFixed(0)}%';
+    }
+
+    if (readingBrightness) {
+      return 'جارٍ قراءة السطوع...';
+    }
+
+    if (!brightnessReady) {
+      return 'تعذر قراءة السطوع';
     }
 
     return 'السطوع ${value.toStringAsFixed(0)}%';
@@ -153,14 +206,11 @@ class _GestureControlsState extends State<GestureControls> {
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
           onPanStart: startGesture,
-          onPanUpdate: (details) =>
-              updateGesture(details, constraints),
-          onPanEnd: endGesture,
-          onPanCancel: () {
-            if (mounted) {
-              setState(() => action = null);
-            }
+          onPanUpdate: (details) {
+            updateGesture(details, constraints);
           },
+          onPanEnd: endGesture,
+          onPanCancel: cancelGesture,
           child: Stack(
             fit: StackFit.expand,
             children: [
@@ -222,11 +272,18 @@ class _GestureControlsState extends State<GestureControls> {
   }
 
   String formatTime(Duration duration) {
+    final safe = duration.isNegative ? Duration.zero : duration;
+
     String two(int number) =>
         number.toString().padLeft(2, '0');
 
-    return '${two(duration.inHours)}:'
-        '${two(duration.inMinutes.remainder(60))}:'
-        '${two(duration.inSeconds.remainder(60))}';
+    if (safe.inHours > 0) {
+      return '${two(safe.inHours)}:'
+          '${two(safe.inMinutes.remainder(60))}:'
+          '${two(safe.inSeconds.remainder(60))}';
+    }
+
+    return '${two(safe.inMinutes)}:'
+        '${two(safe.inSeconds.remainder(60))}';
   }
 }
