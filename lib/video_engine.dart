@@ -12,6 +12,8 @@ class VideoEngine {
     player = Player(
       configuration: const PlayerConfiguration(
         title: 'Burhan Plyer',
+        pitch: true,
+        bufferSize: 64 * 1024 * 1024,
       ),
     );
 
@@ -28,18 +30,28 @@ class VideoEngine {
     await player.open(Media(path));
   }
 
-  Future<void> playPause() => player.playOrPause();
-
-  Future<void> seek(Duration position) => player.seek(position);
-
-  Future<void> setVolume(double value) {
-    return player.setVolume(value.clamp(0, 100).toDouble());
+  Future<void> playPause() async {
+    await player.playOrPause();
   }
 
-  Future<void> setSpeed(double value) => player.setRate(value);
+  Future<void> seek(Duration position) async {
+    await player.seek(position);
+  }
 
-  Future<void> setRepeat(bool enabled) {
-    return player.setPlaylistMode(
+  Future<void> setVolume(double value) async {
+    await player.setVolume(
+      value.clamp(0.0, 100.0).toDouble(),
+    );
+  }
+
+  Future<void> setSpeed(double value) async {
+    await player.setRate(
+      value.clamp(0.25, 3.0).toDouble(),
+    );
+  }
+
+  Future<void> setRepeat(bool enabled) async {
+    await player.setPlaylistMode(
       enabled ? PlaylistMode.single : PlaylistMode.none,
     );
   }
