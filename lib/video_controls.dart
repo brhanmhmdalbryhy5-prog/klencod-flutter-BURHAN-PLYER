@@ -42,6 +42,19 @@ class VideoControls extends StatefulWidget {
 class _VideoControlsState extends State<VideoControls> {
   double? draggingValue;
 
+  @override
+  void didUpdateWidget(covariant VideoControls oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    final maximum = widget.duration.inMilliseconds.toDouble();
+
+    if (maximum <= 0) {
+      draggingValue = null;
+    } else if (draggingValue != null) {
+      draggingValue = draggingValue!.clamp(0.0, maximum).toDouble();
+    }
+  }
+
   String formatTime(Duration duration) {
     final safe = duration.isNegative ? Duration.zero : duration;
 
@@ -80,12 +93,16 @@ class _VideoControlsState extends State<VideoControls> {
     final actualPosition =
         widget.position.inMilliseconds.toDouble();
 
-    final sliderValue = draggingValue ??
-        (hasVideo ? actualPosition.clamp(0.0, total).toDouble() : 0.0);
+    final sliderValue = !hasVideo
+        ? 0.0
+        : (draggingValue ??
+                actualPosition.clamp(0.0, total).toDouble())
+            .clamp(0.0, total)
+            .toDouble();
 
-    final previewPosition = hasVideo
-        ? Duration(milliseconds: sliderValue.round())
-        : Duration.zero;
+    final previewPosition = Duration(
+      milliseconds: sliderValue.round(),
+    );
 
     return Container(
       width: double.infinity,
