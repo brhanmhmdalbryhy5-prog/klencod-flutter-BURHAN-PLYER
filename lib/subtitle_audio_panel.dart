@@ -21,16 +21,17 @@ Future<void> showSubtitleAudioPanel(
       ),
     ),
     builder: (sheetContext) {
+      // تبقى القيم محفوظة بين تحديثات StatefulBuilder.
+      bool busy = false;
+      String? message;
+
       return StatefulBuilder(
         builder: (context, setSheetState) {
-          bool busy = false;
-          String? message;
-
           Future<void> runAction(
             Future<void> Function() action, {
             String? successMessage,
           }) async {
-            if (busy) return;
+            if (busy || !sheetContext.mounted) return;
 
             setSheetState(() {
               busy = true;
@@ -61,50 +62,76 @@ Future<void> showSubtitleAudioPanel(
           }
 
           Future<void> pickSubtitle() async {
-            final result = await FilePicker.platform.pickFiles(
-              type: FileType.custom,
-              allowedExtensions: ['srt', 'ass', 'ssa', 'vtt'],
-            );
+            if (busy) return;
 
-            if (result == null || result.files.isEmpty) return;
+            try {
+              final result = await FilePicker.platform.pickFiles(
+                type: FileType.custom,
+                allowedExtensions: ['srt', 'ass', 'ssa', 'vtt'],
+              );
 
-            final path = result.files.single.path;
+              if (!sheetContext.mounted ||
+                  result == null ||
+                  result.files.isEmpty) {
+                return;
+              }
 
-            if (path == null || path.trim().isEmpty) {
+              final path = result.files.single.path;
+
+              if (path == null || path.trim().isEmpty) {
+                setSheetState(() {
+                  message = 'تعذر الوصول إلى ملف الترجمة.';
+                });
+                return;
+              }
+
+              await runAction(
+                () => manager.load(path),
+                successMessage: 'تم تحميل ملف الترجمة.',
+              );
+            } catch (error) {
               if (!sheetContext.mounted) return;
-              setSheetState(() {
-                message = 'تعذر الوصول إلى ملف الترجمة.';
-              });
-              return;
-            }
 
-            await runAction(
-              () => manager.load(path),
-              successMessage: 'تم تحميل ملف الترجمة.',
-            );
+              setSheetState(() {
+                message = 'تعذر اختيار ملف الترجمة: $error';
+              });
+            }
           }
 
           Future<void> pickAudio() async {
-            final result = await FilePicker.platform.pickFiles(
-              type: FileType.audio,
-            );
+            if (busy) return;
 
-            if (result == null || result.files.isEmpty) return;
+            try {
+              final result = await FilePicker.platform.pickFiles(
+                type: FileType.audio,
+              );
 
-            final path = result.files.single.path;
+              if (!sheetContext.mounted ||
+                  result == null ||
+                  result.files.isEmpty) {
+                return;
+              }
 
-            if (path == null || path.trim().isEmpty) {
+              final path = result.files.single.path;
+
+              if (path == null || path.trim().isEmpty) {
+                setSheetState(() {
+                  message = 'تعذر الوصول إلى ملف الصوت.';
+                });
+                return;
+              }
+
+              await runAction(
+                () => manager.loadAudio(path),
+                successMessage: 'تم تحميل ملف الصوت الخارجي.',
+              );
+            } catch (error) {
               if (!sheetContext.mounted) return;
-              setSheetState(() {
-                message = 'تعذر الوصول إلى ملف الصوت.';
-              });
-              return;
-            }
 
-            await runAction(
-              () => manager.loadAudio(path),
-              successMessage: 'تم تحميل ملف الصوت الخارجي.',
-            );
+              setSheetState(() {
+                message = 'تعذر اختيار ملف الصوت: $error';
+              });
+            }
           }
 
           final subtitleTracks = manager.availableSubtitles;
