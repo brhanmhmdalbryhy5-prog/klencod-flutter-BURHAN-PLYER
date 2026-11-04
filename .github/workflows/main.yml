@@ -41,6 +41,9 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
+            - name: Check Manifest
+        run: python3 -c "import xml.etree.ElementTree as ET; ET.parse('android/app/src/main/AndroidManifest.xml'); print('XML OK')"
+
       - name: Build APK
         run: flutter build apk --release
 
