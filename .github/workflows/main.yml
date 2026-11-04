@@ -1,41 +1,11 @@
-name: Build Flutter APK
+name: Test Build Button
 
 on:
 workflow_dispatch:
 
 jobs:
-build:
-runs-on: ubuntu-24.04
-
+test:
+runs-on: ubuntu-latest
 steps:
-  - name: Checkout
-    uses: actions/checkout@v5
-
-  - name: Setup Java
-    uses: actions/setup-java@v5
-    with:
-      distribution: temurin
-      java-version: '17'
-
-  - name: Setup Flutter
-    uses: subosito/flutter-action@v2
-    with:
-      flutter-version: '3.47.2'
-      channel: stable
-
-  - name: Get dependencies
-    run: flutter pub get
-
-  - name: Check Manifest
-    run: python3 -c "import xml.etree.ElementTree as ET; ET.parse('android/app/src/main/AndroidManifest.xml'); print('XML OK')"
-
-  - name: Build APK
-    run: flutter build apk --release --verbose
-
-  - name: Upload APK
-    uses: actions/upload-artifact@v4
-    with:
-      name: app-release
-      path: build/app/outputs/flutter-apk/app-release.apk
-      if-no-files-found: error
-      retention-days: 7
+- name: Test
+run: echo "Run workflow is working"
